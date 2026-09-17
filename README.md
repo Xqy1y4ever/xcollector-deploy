@@ -55,6 +55,7 @@ cp .env.example .env
 #   GROUP_WHITELIST=<你的官方通知群号>
 #   ONEBOT_WS_URL / ONEBOT_MODE=<按下面的 NapCat 说明>
 
+sh preflight.sh        # 先预检：端口有没有被占、.env 全不全、镜像拉不拉得到
 docker compose pull
 docker compose up -d
 docker compose ps
@@ -63,6 +64,11 @@ docker compose ps
 cd ../xcollector-web
 npm ci && npm run build          # 产出 dist/
 ```
+
+**`sh preflight.sh` 不是必须的，但强烈建议。** `docker compose up` 是「跑完才知道」——
+端口被占、`.env` 没建、`API_TOKEN` 忘了填，都要等容器建完才报，而且一次只报一个。
+预检把这些问题在启动前一次列完，并告诉你每条该怎么修。它只读，不改任何东西、
+不拉镜像、不起容器。退出码 0 = 可以 up。
 
 然后把 `dist/` 交给你的 web server，按下一节的配置加上两条反代。
 打开页面后用 `.env` 里的 `API_TOKEN` 登录。
@@ -339,7 +345,8 @@ docker compose exec bot python -m app.tools.check_llm          # 模型配置能
 ```
 
 **`up` 时报 `failed to bind host port ... address already in use`** → 宿主机那个端口
-被占了，不是配置写错。查占用者并决定停掉它还是换端口：
+被占了，不是配置写错。`sh preflight.sh` 会直接告诉你**是哪个进程**占的，以及该改哪个
+变量。手动查也一样：
 
 ```bash
 ss -ltnp | grep ':8000'
@@ -372,8 +379,13 @@ docker ps --format '{{.Names}}\t{{.Ports}}' | grep 8000
   bot 136 条端到端断言 + 96 条 LLM 网关断言、前端 `npm run build` 通过）
 - ✅ **两个镜像确实已经构建并推上 GHCR 了** —— CI 成功，匿名拉 manifest 能取到
   （bot 镜像压缩层合计 57 MB）
+- ✅ `preflight.sh` 过了 13 个场景（端口占用、端口号前缀不误报、缺 key、
+  大小写镜像名、端口重复、server/client 两种模式…），断言的是**输出内容**而不只是
+  退出码 —— 只看退出码会漏掉「因为别的原因失败却碰巧退出码相同」
 - ❌ **没有真正 `docker compose up` 或 `docker compose pull` 跑过** ——
   容器网络是否如预期，需要在有 Docker 的机器上确认
+- ❌ **`preflight.sh` 是在模拟环境里测的**（假 `docker` + 假 `ss`，跑在 Git Bash 上），
+  不是真 Docker 主机；真机上 `ss` 输出格式若有差异仍需留意
 - ❌ **README 里那两份 nginx / Caddy 配置没有实跑过** —— 语法是照标准写的，
   但没在真实 web server 上验证过
 
