@@ -151,6 +151,42 @@ else
   note '生成一个： python3 -c "import secrets;print(secrets.token_hex(32))"'
 fi
 
+# 网页令牌：决定"拿到网页的人能不能改库"。这是最容易漏配的一项，
+# 而且漏配的后果是**静默的** —— 一切照常工作，只是分级没了。
+WEB_TOKEN_V=$(env_get WEB_API_TOKEN '')
+if [ -z "$API_TOKEN_V" ]; then
+  note "API_TOKEN 为空，跳过网页令牌的分级检查（本来就没启用认证）"
+elif [ -z "$WEB_TOKEN_V" ]; then
+  bad "WEB_API_TOKEN 为空 —— 分级没生效：所有能打开网页的人都能改库"
+  note "留空 = 网页令牌退化成写入令牌，也就是拆分之前的行为。"
+  note "想让网页只能读 + 标注，就单独生成一个**不同**的值填进去。"
+  note '生成： python3 -c "import secrets;print(secrets.token_hex(32))"'
+elif [ "$WEB_TOKEN_V" = "$API_TOKEN_V" ]; then
+  bad "WEB_API_TOKEN 与 API_TOKEN 相同 —— 分级完全失效"
+  note "网页令牌就是写入令牌：拿到它的人照样能入库、删通知、以你的身份发消息。"
+  note '换一个不同的随机串： python3 -c "import secrets;print(secrets.token_hex(32))"'
+else
+  ok "WEB_API_TOKEN 已设置，且与写入令牌不同（分级生效）"
+  if [ "${#WEB_TOKEN_V}" -lt 16 ]; then
+    warn "WEB_API_TOKEN 偏短，建议 32 字节随机值"
+  fi
+fi
+
+# 附件签名：设为 0 会让证据图静默 401（图片位置空着，不会报错）
+TTL_V=$(env_get ATTACHMENT_URL_TTL '3600')
+case "$TTL_V" in
+  0)
+    warn "ATTACHMENT_URL_TTL=0 —— 附件不做签名，证据图和附件下载会 401 显示不出来"
+    note "浏览器 <img> 带不了 Authorization 头，所以必须靠签名 URL。改回 3600 或留空。"
+    ;;
+  ''|*[!0-9]*)
+    warn "ATTACHMENT_URL_TTL=${TTL_V} 不是正整数，后端会当成无效值处理"
+    ;;
+  *)
+    ok "附件签名 URL 有效期 ${TTL_V}s"
+    ;;
+esac
+
 if [ -f docker-compose.yml ]; then
   if docker compose config >/dev/null 2>&1; then
     ok "docker compose config 解析通过"

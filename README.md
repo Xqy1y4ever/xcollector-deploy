@@ -51,11 +51,12 @@ docker compose ls -a                                      # 有没有遗留的�
 cd xcollector-deploy
 cp .env.example .env
 # 至少改这几项：
-#   API_TOKEN=<生成一个>
+#   API_TOKEN=<生成一个，只给 bot，不进浏览器>
+#   WEB_API_TOKEN=<再生成一个**不同**的，前端登录页用>
 #   GROUP_WHITELIST=<你的官方通知群号>
 #   ONEBOT_WS_URL / ONEBOT_MODE=<按下面的 NapCat 说明>
 
-sh preflight.sh        # 先预检：端口有没有被占、.env 全不全、镜像拉不拉得到
+sh preflight.sh        # 先预检：两个令牌配没配/是否重复、端口有没有被占、镜像拉不拉得到
 docker compose pull
 docker compose up -d
 docker compose ps
@@ -65,8 +66,19 @@ cd ../xcollector-web
 npm ci && npm run build          # 产出 dist/
 ```
 
+**两个令牌必须不同**，这是这一版最重要的配置项：
+
+| 令牌 | 谁用 | 能做什么 |
+|---|---|---|
+| `API_TOKEN` | 只有 bot（在服务器上） | 全部：入库、改机器字段、删除、发 QQ 消息 |
+| `WEB_API_TOKEN` | 前端登录页（浏览器里） | 只能读、提交人工修正、标记已读 |
+
+网页令牌要交给登录页，所以**任何能打开网页的人都能拿到它**。两个填成一样，
+分级就完全失效（`preflight.sh` 会直接报错，启动日志也会警告）。拆开之后，
+网页令牌泄露最多只能读，改不了库、也发不了消息。
+
 **`sh preflight.sh` 不是必须的，但强烈建议。** `docker compose up` 是「跑完才知道」——
-端口被占、`.env` 没建、`API_TOKEN` 忘了填，都要等容器建完才报，而且一次只报一个。
+端口被占、`.env` 没建、令牌忘了填，都要等容器建完才报，而且一次只报一个。
 预检把这些问题在启动前一次列完，并告诉你每条该怎么修。它只读，不改任何东西、
 不拉镜像、不起容器。退出码 0 = 可以 up。
 
@@ -140,7 +152,24 @@ server {
         try_files $uri $uri/ /index.html;      # SPA fallback
     }
 
+    # ---- 可选：第二层防线（推荐）----
+    # 令牌分级已经是第一层（写接口只认 API_TOKEN，网页令牌拿到 403）。
+    # 加上这两段，浏览器**根本发不出去**写请求，连 403 都到不了后端。
+    #
+    # 正则 location 的优先级高于下面的前缀 location，所以这两个 POST 会先命中。
+    # 不放行它们的话，「人工修正」和「标记已读」会直接 403 —— 那是前端真正要用的。
+    location ~ ^/api/notifications/[^/]+/(corrections|read)$ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+    }
+
     location /api/ {
+        # 其余一律只读。limit_except GET 同时放行 HEAD。
+        # 附件下载是 GET，不受影响。
+        limit_except GET {
+            deny all;
+        }
         proxy_pass http://127.0.0.1:8000;      # 结尾不带 /，前缀保留
         proxy_set_header Host $host;
         proxy_set_header Authorization $http_authorization;
@@ -286,12 +315,18 @@ Docker Desktop 自带）。NapCat 在别的机器上就换成那台的 IP。
 
 ### 前端登录能力的边界（别高估它）
 
-- 它是**一个共享密钥**，不是按用户的账号体系 —— 所有登录的人权限完全一样，
-  没有审计、没有分级
+- 网页令牌（`WEB_API_TOKEN`）泄露的后果是**有界的**：它只能读 + 人工修正 + 标已读，
+  改不了库、发不了消息（写接口一律 403）。**前提是它和 `API_TOKEN` 不是同一个值** ——
+  配成一样就等于没有分级，`preflight.sh` 会直接报错。
+- 但它**仍然是一个共享密钥**，不是按用户的账号体系：所有拿同一个网页令牌登录的人
+  看到的东西、能做的事完全一样，没有审计、没法单独吊销某个人。
+- **读权限本身也是信息**：所有原始消息和附件都能被看到。所以令牌泄露 ≠ 没事，
+  只是不会被人改数据。
 - token 存在浏览器 storage 里，**任何能在这台浏览器上执行 JS 的东西都能读到**，
   XSS 会泄露它
-- 所以：**真正的边界仍然是不要把页面暴露到公网**。要对外提供服务，就在前面套
-  一层真正的认证（带登录的反向代理 / VPN / Tailscale 之类的私有网络）
+- 所以：**真正的边界仍然是不要把页面暴露到公网**，并且**上 HTTPS**（明文 HTTP 下
+  令牌在网线上是裸的）。要对外提供服务，就在前面套一层真正的认证
+  （带登录的反向代理 / VPN / Tailscale 之类的私有网络）
 
 > 前端仓库里也有 `VITE_API_TOKEN`，那是「预置令牌」的降级路径：环境变量有值而
 > 登录态为空时直接用它，方便不用登录页的开发/CI 场景。**正常部署不要填** ——
