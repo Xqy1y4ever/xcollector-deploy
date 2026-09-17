@@ -301,9 +301,9 @@ docker compose up -d
 或 `v1.2.3`，再配合 `PULL_POLICY=missing`，就不会哪次 `up` 被意外升级。
 回滚同理 —— 改回旧 tag，`docker compose up -d` 即可（数据在卷里，不受影响）。
 
-> `EXTRACTOR=llm` 需要镜像里带 litellm。CI 默认 `BUILD_LLM=1`（装了），
-> 所以从 GHCR 拉的 bot 镜像开箱可用。想省几百 MB 就在 bot 仓库的
-> Settings → Variables 里加一个 `BUILD_LLM=0` 重新触发构建。
+> `EXTRACTOR=llm` 开箱可用，**镜像里不需要任何额外的 LLM 依赖**：
+> 多厂商调用走 bot 自带的 `app/llm/` 网关（OpenAI 格式 + Google 原生格式），
+> 只用到 `httpx`。所以没有 `BUILD_LLM` 这个构建开关了。
 
 ## 排查
 

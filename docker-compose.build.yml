@@ -25,6 +25,3 @@ services:
       context: ../xcollector-bot
       args:
         PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
-        # 1 = 把 litellm 一起装进镜像（启用 EXTRACTOR=llm/both 时才需要）。
-        # 官方 CI 默认就是 1，所以从 GHCR 拉的镜像已经带 litellm。
-        BUILD_LLM: ${BUILD_LLM:-1}
