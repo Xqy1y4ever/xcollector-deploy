@@ -1,0 +1,13 @@
+# 部署配置里含密钥，绝不能进版本库
+.env
+.env.local
+
+# 备份产物
+*.tar.gz
+*.sqlite
+*.db
+
+# 编辑器
+.vscode/
+.idea/
+*.log

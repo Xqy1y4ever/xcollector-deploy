@@ -1,0 +1,148 @@
+# Xcollector 三件套的编排
+#
+#   web  ──/api──▶ backend(SQLite + 附件)          ← 纯数据层
+#     └──/bot──▶ bot ──OneBot WS──▶ NapCat(宿主机)
+#
+# 三条设计意图，不是随手写的：
+#   1. 只有 web 对外开端口。backend 与 bot 绑在 127.0.0.1，不进公网。
+#      「不要把后端和 bot 暴露出去」这条原则在 compose 里落到实处。
+#   2. 只有一个共享密钥 API_TOKEN。nginx 在代理时注入 Authorization，
+#      token 因此**不进前端 bundle**。
+#   3. backend 的数据挂命名卷。SQLite 和附件是唯一不可再生的东西，
+#      容器随便删，卷不能丢。
+#
+# 用法：cp .env.example .env 后改几项，再 docker compose up -d --build
+# 详见 README.md
+
+name: xcollector
+
+services:
+  # ---------------- 纯数据层 ----------------
+  backend:
+    build:
+      context: ../xcollector-backend
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    image: xcollector-backend:latest
+    container_name: xcollector-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内路径：DB 与附件都落在挂载卷上
+      DB_PATH: data/xcollector.db
+      ATTACHMENT_DIR: data/attachments
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8000"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - backend-data:/app/data
+    ports:
+      # 只绑本机：方便你 curl 调试，但不暴露到局域网/公网。
+      # 想去掉这个映射直接删掉整段 ports 即可（web 仍能通过内部网络访问它）。
+      - "127.0.0.1:8000:8000"
+    networks: [xcollector]
+    # 镜像里已有 HEALTHCHECK，这里不用重复定义
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------- 消息处理层 ----------------
+  bot:
+    build:
+      context: ../xcollector-bot
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+        # 设成 1 会把 litellm 一起装进镜像（启用 EXTRACTOR=llm 时才需要）
+        BUILD_LLM: ${BUILD_LLM:-0}
+    image: xcollector-bot:latest
+    container_name: xcollector-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内必须用服务名，不能用 127.0.0.1（那是容器自己）
+      BACKEND_BASE_URL: http://backend:8000
+      BOT_LISTEN_HOST: 0.0.0.0
+      BOT_LISTEN_PORT: "8082"
+      # 反向 WS 模式时 NapCat 从宿主机连进来，所以也要监听 0.0.0.0
+      ONEBOT_LISTEN_HOST: 0.0.0.0
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      # 8082（bot 的 HTTP API）**不对外开** —— 只有 web 的 nginx 需要访问它，
+      # 走内部网络即可。
+      # 8081 只在 ONEBOT_MODE=server（NapCat 反向连过来）时才需要，
+      # 而且那条连接来自宿主机，所以必须发布：
+      - "127.0.0.1:8081:8081"
+    extra_hosts:
+      # 让容器能用 host.docker.internal 指到宿主机（Linux 上需要这一行，
+      # Docker Desktop for Windows/Mac 自带）
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [xcollector]
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------- 展示层 + 反向代理 ----------------
+  web:
+    build:
+      context: ../xcollector-web
+      args:
+        # Docker 部署下**刻意留空**：token 由 nginx 注入，不进 bundle。
+        # 想让 token 进 bundle（不推荐）才需要填这两个。
+        VITE_API_TOKEN: ""
+        VITE_BOT_API_TOKEN: ""
+    image: xcollector-web:latest
+    container_name: xcollector-web
+    restart: unless-stopped
+    environment:
+      # nginx 的 envsubst 会把这些替换进模板。
+      # ⚠ 必须**始终定义**（哪怕是空串）：模板里引用了却未定义的话，
+      #   占位符会原样留下，nginx 会当成未知变量并启动失败。
+      API_TOKEN: ${API_TOKEN:-}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      # 默认所有网卡都开，这样手机/平板也能看。
+      # 只想本机访问就改成 "127.0.0.1:${WEB_PORT:-8080}:80"
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_started
+      bot:
+        condition: service_started
+    networks: [xcollector]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  # 唯一需要保护的持久化数据：SQLite 库 + 附件字节
+  backend-data:
+    driver: local
+
+networks:
+  xcollector:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# NapCat 不在这份 compose 里，这是刻意的
+#
+# NapCat 要跑在有 QQ 客户端的地方，通常就是你的宿主机或另一台机器，而且它的
+# 安装/登录本来就由你自己完成。两种接法：
+#
+# A) 正向 WS（推荐，ONEBOT_MODE=client）
+#    在 NapCat 里开一个 WebSocket 服务（端口 3001），然后在 .env 里设
+#        ONEBOT_MODE=client
+#        ONEBOT_WS_URL=ws://host.docker.internal:3001
+#    extra_hosts 已经配好，容器能通过这个名字找到宿主机。
+#
+# B) 反向 WS（ONEBOT_MODE=server）
+#    在 NapCat 里配反向 WebSocket，URL 填 ws://<你的宿主机IP>:8081/onebot/ws
+#    （容器内的 8081 已经发布到宿主机 127.0.0.1:8081）。
+#
+# 想连另一台机器上的 NapCat，把 ONEBOT_WS_URL 换成那台的地址即可，
+# 这时 extra_hosts 就不需要了。
+#
+# ⚠ 上线前确认：**没有别的东西也在连同一个 NapCat**。旧版后端会自己去连
+#   OneBot，如果它还在跑，同一个 QQ 账号的消息会被两条链路各收一份、重复入库。
+# ---------------------------------------------------------------------------
