@@ -7,6 +7,9 @@
 #       /api/  → 127.0.0.1:8000   （后端，前缀保留）
 #       /bot/  → 127.0.0.1:8082   （bot，**必须摘掉 /bot 前缀**）
 #
+#   这两个端口是默认值，可以在 .env 里用 BACKEND_HOST_PORT / BOT_HOST_PORT 改
+#   （宿主机端口被占时用得上）—— 改了记得同步反向代理里的地址。
+#
 #   静态文件与这两个反代必须**同源**（同一个 host:port），否则浏览器会跨域。
 #   现成配置见 README「托管 dist」一节（nginx 与 Caddy 各一份）。
 #
@@ -45,9 +48,14 @@ services:
       - backend-data:/app/data
     ports:
       # 绑本机：你的 web server 在同一台机器上反代它。
-      # 如果 web server 在别的机器上，改成 "0.0.0.0:8000:8000" —— 但先想清楚
-      # 网络边界：后端不带 TLS，直接暴露出去等于数据裸奔。
-      - "127.0.0.1:8000:8000"
+      # 如果 web server 在别的机器上，改成 "0.0.0.0:${BACKEND_HOST_PORT:-8000}:8000"
+      # —— 但先想清楚网络边界：后端不带 TLS，直接暴露出去等于数据裸奔。
+      #
+      # 左边的宿主机端口可以在 .env 里改（BACKEND_HOST_PORT）。宿主机 8000 被占
+      # 是部署时最常见的事故，改这里就行 —— 容器之间走 compose 内网
+      # （bot 用的是 http://backend:8000），**不经过这个端口**，所以改了不影响
+      # 任何容器间通信，只要把你的反向代理指到新端口即可。
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
     networks: [xcollector]
     security_opt:
       - no-new-privileges:true
@@ -71,10 +79,12 @@ services:
     ports:
       # 8082：bot 的 HTTP API。前端「系统状态」页要调它，所以**必须发布** ——
       # 以前是同网络的 nginx 走内部访问，现在没有那一层了。
-      - "127.0.0.1:8082:8082"
+      - "127.0.0.1:${BOT_HOST_PORT:-8082}:8082"
       # 8081：只在 ONEBOT_MODE=server（NapCat 反向连过来）时才需要，
       # 那条连接来自宿主机，所以也要发布。
-      - "127.0.0.1:8081:8081"
+      # ⚠ 注意：ONEBOT_MODE=server 时，NapCat 里填的 URL 端口要跟
+      #   ONEBOT_HOST_PORT 对上（默认 8081）。
+      - "127.0.0.1:${ONEBOT_HOST_PORT:-8081}:8081"
     extra_hosts:
       # 让容器能用 host.docker.internal 指到宿主机（Linux 上需要这一行，
       # Docker Desktop for Windows/Mac 自带）

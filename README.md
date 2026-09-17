@@ -23,6 +23,25 @@
 > 这两个端口以前是不对外开的（由同网络的 nginx 走内部访问）。**现在必须发布**，
 > 因为你的 web server 要靠它们反代。
 
+宿主机侧这三个端口都能在 `.env` 里改（`BACKEND_HOST_PORT` / `BOT_HOST_PORT` /
+`ONEBOT_HOST_PORT`）。容器之间走 compose 内网（bot 用的是 `http://backend:8000`），
+**不经过宿主机端口**，所以改了不影响任何容器间通信 —— 只要把反向代理指到新端口。
+
+端口被占是部署时最常见的事故，报错长这样：
+
+```
+Error response from daemon: driver failed programming external connectivity ...
+failed to bind host port for 127.0.0.1:8000:...: address already in use
+```
+
+先查是谁占的，再决定是「停掉它」还是「换个端口」：
+
+```bash
+ss -ltnp | grep ':8000'                                  # 看占用进程（要 root）
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep 8000   # 是不是别的容器
+docker compose ls -a                                      # 有没有遗留的旧项目
+```
+
 ## 快速开始
 
 **前置**：两个镜像要先在 GHCR 上存在（见下一节）；`dist/` 要先构建好。
@@ -89,6 +108,9 @@ docker rm xcw
 | `/` | 静态文件；找不到就回 `index.html`（SPA 路由） |
 | `/api/` | 反代到 `127.0.0.1:8000`，**前缀保留** |
 | `/bot/` | 反代到 `127.0.0.1:8082`，**前缀要摘掉** |
+
+（这两个端口是默认值。若你在 `.env` 里改过 `BACKEND_HOST_PORT` / `BOT_HOST_PORT`，
+下面的 `proxy_pass` / `reverse_proxy` 也要跟着改。）
 
 并且**原样转发**浏览器带的 `Authorization` 头 —— 认证在前端登录页做，
 代理里一旦无条件注入服务端 token，登录页就形同虚设。
@@ -313,7 +335,20 @@ docker compose logs -f backend
 docker compose exec backend python -m tests.check_config       # 配置边界自检
 docker compose exec bot python -m tests.check_timeparse        # 时间解析回归
 docker compose exec bot python -m tests.check_location         # 地点抽取回归
+docker compose exec bot python -m app.tools.check_llm          # 模型配置能不能用（要联网）
 ```
+
+**`up` 时报 `failed to bind host port ... address already in use`** → 宿主机那个端口
+被占了，不是配置写错。查占用者并决定停掉它还是换端口：
+
+```bash
+ss -ltnp | grep ':8000'
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep 8000
+```
+
+换端口：在 `.env` 里改 `BACKEND_HOST_PORT`（或 `BOT_HOST_PORT`），
+然后同步改反向代理，再 `docker compose down && docker compose up -d`。
+如果是以前遗留的 xcollector 容器占着，先 `docker compose down` 清掉。
 
 浏览器打开页面看到「bot 未运行或不可达」→ 看 `docker compose logs bot`，
 多半是 `ONEBOT_WS_URL` 连不上 NapCat（这不会让 bot 崩，只会让它收不到消息）。
@@ -332,11 +367,13 @@ docker compose exec bot python -m tests.check_location         # 地点抽取回
 
 这套编排是在**没有安装 Docker 的机器上**写的，因此：
 
-- ✅ YAML 语法、锚点解析、镜像名大小写、构建上下文与 CI 小写化都经过静态检查
+- ✅ YAML 语法、锚点解析、端口变量替换、镜像名大小写、构建上下文与 CI 小写化都经过静态检查
 - ✅ 两个容器里跑的命令与配置项，都是本机原生跑通过的（后端 179 条接口断言、
-  bot 136 条端到端断言、前端 `npm run build` 通过）
+  bot 136 条端到端断言 + 96 条 LLM 网关断言、前端 `npm run build` 通过）
+- ✅ **两个镜像确实已经构建并推上 GHCR 了** —— CI 成功，匿名拉 manifest 能取到
+  （bot 镜像压缩层合计 57 MB）
 - ❌ **没有真正 `docker compose up` 或 `docker compose pull` 跑过** ——
-  镜像能不能构建推送、容器网络是否如预期，都需要你在有 Docker 的机器上确认
+  容器网络是否如预期，需要在有 Docker 的机器上确认
 - ❌ **README 里那两份 nginx / Caddy 配置没有实跑过** —— 语法是照标准写的，
   但没在真实 web server 上验证过
 
@@ -345,7 +382,9 @@ docker compose exec bot python -m tests.check_location         # 地点抽取回
 1. **GHCR 上有没有镜像** —— Packages 页面能看到两个包吗？private 的话部署机
    登录了吗？（`docker compose pull` 会直接报 `denied` 或 `manifest unknown`）
 2. **CI 有没有跑成功** —— 仓库的 Actions 页签。失败最常见的原因是镜像名带大写。
-3. **你的反代有没有把 `/bot` 前缀摘掉** —— 这是最容易写错的一处。
+3. **宿主机端口被占** —— `failed to bind host port ... address already in use`。
+   改 `.env` 里的 `BACKEND_HOST_PORT` / `BOT_HOST_PORT` 即可（见上面「快速开始」）。
+4. **你的反代有没有把 `/bot` 前缀摘掉** —— 这是最容易写错的一处。
    反代配错的表现是状态页报错、而通知列表正常（因为 `/api` 不用摘前缀）。
-4. **`bot` 能不能解析 `host.docker.internal`** —— `docker compose logs bot`，
+5. **`bot` 能不能解析 `host.docker.internal`** —— `docker compose logs bot`，
    连不上 NapCat 不会让 bot 崩，只会让它收不到消息。
