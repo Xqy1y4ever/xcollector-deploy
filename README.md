@@ -52,7 +52,37 @@ npm ci && npm run build          # 产出 dist/
 
 ## 托管 dist
 
-前端产物是**纯静态站点**。用哪个 web server 都行，关键是三条规则：
+### 先拿到 dist（不用装 Node）
+
+`xcollector-web` 的 CI 会构建好并发布成 Release 附件，部署机上直接下载：
+
+```bash
+sudo mkdir -p /var/www/xcollector
+curl -L https://github.com/Xqy1y4ever/xcollector-web/releases/latest/download/dist.tar.gz \
+  | sudo tar xz -C /var/www/xcollector
+# → /var/www/xcollector/dist/
+```
+
+已经在用 Docker 的话，也可以从 GHCR 取（同一个产物）：
+
+```bash
+docker pull ghcr.io/xqy1y4ever/xcollector-web:latest
+docker create --name xcw ghcr.io/xqy1y4ever/xcollector-web:latest
+docker cp xcw:/dist/. /var/www/xcollector/dist/
+docker rm xcw
+```
+
+> GHCR 上那个镜像是 `FROM scratch` 的**纯文件袋**，没有运行时也没有服务，
+> **不能 `docker run`** —— 它只是让你少装一个 Node。
+
+想跟着某个固定版本走，把 URL 里的 `latest` 换成 `v1.2.3` 那样的 tag
+（`releases/latest/` 要改成 `releases/download/v1.2.3/`）。
+
+也可以自己构建：`npm ci && npm run build`。
+
+### 然后托管它
+
+产物是**纯静态站点**。用哪个 web server 都行，关键是三条规则：
 
 | 路径 | 动作 |
 |---|---|
