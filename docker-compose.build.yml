@@ -1,0 +1,35 @@
+# 本地构建用的**叠加文件**（可选）
+#
+# 主文件 docker-compose.yml 只拉镜像。想从源码构建时叠加这份：
+#
+#     docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# 前提：三个源码仓库和 xcollector-deploy 是**同级目录**（下面用 ../ 引用它们）。
+# 只克隆了 deploy 仓库的话，这份文件用不了 —— 直接用主文件拉镜像即可。
+#
+# 镜像名沿用主文件里的 ${IMAGE_*}，所以构建出来的镜像和拉下来的是同一个 tag，
+# 两种模式可以随时切换。
+
+services:
+  backend:
+    build:
+      context: ../xcollector-backend
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+
+  bot:
+    build:
+      context: ../xcollector-bot
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+        # 1 = 把 litellm 一起装进镜像（启用 EXTRACTOR=llm/both 时才需要）。
+        # 官方 CI 默认就是 1，所以从 GHCR 拉的镜像已经带 litellm。
+        BUILD_LLM: ${BUILD_LLM:-1}
+
+  web:
+    build:
+      context: ../xcollector-web
+      args:
+        # Docker 部署下**刻意留空**：token 由前端登录页提供，不进 bundle。
+        VITE_API_TOKEN: ""
+        VITE_BOT_API_TOKEN: ""

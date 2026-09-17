@@ -1,31 +1,37 @@
-# Xcollector 三件套的编排
+# Xcollector 三件套的编排（**拉取镜像**模式）
 #
 #   web  ──/api──▶ backend(SQLite + 附件)          ← 纯数据层
 #     └──/bot──▶ bot ──OneBot WS──▶ NapCat(宿主机)
 #
+# 这份文件**只拉镜像、不构建**：docker compose up 会从下面的镜像地址取。
+# 想在本地从源码构建，叠加 docker-compose.build.yml：
+#     docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
 # 三条设计意图，不是随手写的：
 #   1. 只有 web 对外开端口。backend 与 bot 绑在 127.0.0.1，不进公网。
-#      「不要把后端和 bot 暴露出去」这条原则在 compose 里落到实处。
-#   2. 只有一个共享密钥 API_TOKEN。nginx 在代理时注入 Authorization，
-#      token 因此**不进前端 bundle**。
-#   3. backend 的数据挂命名卷。SQLite 和附件是唯一不可再生的东西，
-#      容器随便删，卷不能丢。
+#   2. 只有一个共享密钥 API_TOKEN，认证在前端登录页做（nginx 原样透传）。
+#   3. backend 的数据挂命名卷 —— SQLite 和附件是唯一不可再生的东西。
 #
-# 用法：cp .env.example .env 后改几项，再 docker compose up -d --build
+# 用法：cp .env.example .env 后改几项，再 docker compose up -d
 # 详见 README.md
 
 name: xcollector
 
+# 镜像地址与版本都在 .env 里配（默认指向 ghcr.io/xqy1y4ever/*）。
+# 注意：**GHCR 的镜像路径必须全小写**，用户名里的 X 要写成 x。
+x-backend-image: &backend-image "${IMAGE_BACKEND:-ghcr.io/xqy1y4ever/xcollector-backend}:${VERSION:-latest}"
+x-bot-image: &bot-image "${IMAGE_BOT:-ghcr.io/xqy1y4ever/xcollector-bot}:${VERSION:-latest}"
+x-web-image: &web-image "${IMAGE_WEB:-ghcr.io/xqy1y4ever/xcollector-web}:${VERSION:-latest}"
+
 services:
   # ---------------- 纯数据层 ----------------
   backend:
-    build:
-      context: ../xcollector-backend
-      args:
-        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
-    image: xcollector-backend:latest
+    image: *backend-image
     container_name: xcollector-backend
     restart: unless-stopped
+    # missing = 本地没有才拉；always = 每次 up 都去拉最新。
+    # 想固定版本时把 .env 里的 VERSION 设成具体 tag（如 v1.2.0）再配合 missing。
+    pull_policy: ${PULL_POLICY:-missing}
     env_file:
       - .env
     environment:
@@ -48,15 +54,10 @@ services:
 
   # ---------------- 消息处理层 ----------------
   bot:
-    build:
-      context: ../xcollector-bot
-      args:
-        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
-        # 设成 1 会把 litellm 一起装进镜像（启用 EXTRACTOR=llm 时才需要）
-        BUILD_LLM: ${BUILD_LLM:-0}
-    image: xcollector-bot:latest
+    image: *bot-image
     container_name: xcollector-bot
     restart: unless-stopped
+    pull_policy: ${PULL_POLICY:-missing}
     env_file:
       - .env
     environment:
@@ -86,20 +87,15 @@ services:
 
   # ---------------- 展示层 + 反向代理 ----------------
   web:
-    build:
-      context: ../xcollector-web
-      args:
-        # Docker 部署下**刻意留空**：token 由 nginx 注入，不进 bundle。
-        # 想让 token 进 bundle（不推荐）才需要填这两个。
-        VITE_API_TOKEN: ""
-        VITE_BOT_API_TOKEN: ""
-    image: xcollector-web:latest
+    image: *web-image
     container_name: xcollector-web
     restart: unless-stopped
+    pull_policy: ${PULL_POLICY:-missing}
     environment:
-      # nginx 的 envsubst 会把这些替换进模板。
-      # ⚠ 必须**始终定义**（哪怕是空串）：模板里引用了却未定义的话，
-      #   占位符会原样留下，nginx 会当成未知变量并启动失败。
+      # 当前 nginx 模板**不再注入** Authorization，认证由前端登录页承担
+      # （模板里只保留了注释形式的注入方案）。
+      # 这个变量仍然要定义：一旦你把模板里那行注释打开，envsubst 就需要它；
+      # 而且缺了它模板里的 ${API_TOKEN} 会原样留下，nginx 会当成未知变量启动失败。
       API_TOKEN: ${API_TOKEN:-}
       TZ: ${TZ:-Asia/Shanghai}
     ports:
