@@ -1,43 +1,87 @@
-# Xcollector 部署编排
+# Xcollector
 
-用 Docker Compose 把 Xcollector 的**后端**和 **bot** 跑起来。这是整套系统的部署入口。
+把 QQ **官方通知群**里的消息，自动整理成**带截止时间的任务条目**，发布到网页上给你看。
+
+群里的通知常常被闲聊淹没，一条 DDL 又可能散在几条消息里 —— 逐条爬楼的注意力成本
+高于信息本身的价值。Xcollector 把这件事自动化：接一个 QQ 机器人，自动筛选、
+抽取、归档，并每天推一份摘要回群里。
+
+> 本仓库（`xcollector-deploy`）既是 Xcollector 的**项目主页**，也是**部署入口** ——
+> 用 Docker Compose 把整套系统跑起来看这里就够了。
+
+## 它解决什么问题
+
+官方通知发在几个固定群、由固定几个发布者发出。系统的输出是**任务条目**：
+含截止时间、地点、详细说明，并且**旁边永远能看到它依据的原文**。
+
+精度要求很高 —— 一个错的截止时间比没有截止时间更糟，因为它会被信任。
+所以整套系统围绕一个目标设计：**LLM 可以出错，但不能静默出错**。
+
+## 四个仓库
+
+| 仓库 | 技术栈 | 职责 |
+|---|---|---|
+| [`xcollector-bot`](https://github.com/Xqy1y4ever/xcollector-bot) | Python 3.12 · FastAPI · websockets | **处理消息**：接 OneBot、筛选、抽取任务与截止时间、下载附件、检测缺口、推送摘要、接受私聊指令 |
+| [`xcollector-backend`](https://github.com/Xqy1y4ever/xcollector-backend) | Python 3.12 · FastAPI · SQLite | **数据层**：存储与增删查改、附件存取 |
+| [`xcollector-web`](https://github.com/Xqy1y4ever/xcollector-web) | Vue 3 · Element Plus · Pinia · Vite | **通知台**：按截止时间排序展示、解析结果与原文对照、人工修正。只产出 `dist/`，不参与运行时 |
+| `xcollector-deploy` ← 你在这里 | Docker Compose | **部署入口**：编排后端与 bot；前端产物由你自己的 web server 托管 |
+
+三个服务之间唯一的约定是接口契约
+[`xcollector-backend/docs/api.md`](https://github.com/Xqy1y4ever/xcollector-backend/blob/main/docs/api.md)。
 
 ## 架构
 
 ```
-浏览器 ──▶ 你的 web server ──┬── /      ──▶ dist/   ← 前端静态文件
-                              ├── /api/  ──▶ backend ← 数据层（SQLite + 附件，挂在卷上）
-                              └── /bot/  ──▶ bot     ← 处理消息，连 OneBot
-                                                │
-                                                ▼
-                                        NapCat（宿主机，你自己装）
+QQ 群 ──▶ NapCat ──OneBot──▶ xcollector-bot ──HTTP──▶ xcollector-backend
+                                  │                    （SQLite + 附件卷）
+                                  │ 每日摘要推回 QQ
+                                  ▼
+浏览器 ──▶ 你的 web server ──┬── /      ──▶ dist/     （前端静态文件）
+                              ├── /api/  ──▶ backend
+                              └── /bot/  ──▶ bot
 ```
 
-| 服务 | 作用 | 发布到 |
+| 服务 | 作用 | 端口 |
 |---|---|---|
 | `backend` | 数据层：存储、查询、附件 | `127.0.0.1:8000` |
-| `bot` | 接 OneBot、筛选、抽取、每日摘要、私聊指令 | `127.0.0.1:8082`（HTTP）、`127.0.0.1:8081`（反向 WS） |
+| `bot` | 接 OneBot、筛选、抽取、摘要、指令 | `127.0.0.1:8082`（HTTP）、`127.0.0.1:8081`（反向 WS） |
+| 前端 | 静态文件，由你自己的 web server 托管 | 你决定 |
+| NapCat | QQ 客户端，不在这份编排里，需自行安装登录 | 通常 `3001` |
 
-**前端不在这份编排里。** `xcollector-web` 只产出 `dist/` 静态文件，你需要自己用
-web server 托管它，并把两个前缀反代到上面两个端口。三者**必须同源**
-（同一个 host:port），否则浏览器会跨域。
-
-宿主机侧的三个端口都能在 `.env` 里改（`BACKEND_HOST_PORT` / `BOT_HOST_PORT` /
-`ONEBOT_HOST_PORT`）。容器之间走 compose 内网，不经过宿主机端口，
-所以改了不影响容器间通信 —— 只要把反向代理指到新端口。
+**前端不产出镜像、也不带 nginx** —— 它只负责 `npm run build` 出 `dist/`，
+由你自己的 web server 托管并加上两条反代。三者**必须同源**，否则浏览器会跨域。
 
 ## 技术栈
 
 | | |
 |---|---|
-| 编排 | Docker Compose（只拉镜像，不构建） |
-| 镜像 | GitHub Container Registry（GHCR） |
-| 数据 | 命名卷 `backend-data`（SQLite + 附件） |
-| 前端 | 你自己选的 web server（nginx / Caddy / …） |
+| 消息层 | Python 3.12 · FastAPI · websockets · OneBot v11（NapCat） |
+| 数据层 | Python 3.12 · FastAPI · SQLite |
+| 前端 | Vue 3 · Element Plus · Pinia · Vite |
+| 大模型 | 自研网关，支持 OpenAI 格式与 Google 原生格式，无厂商 SDK |
+| 部署 | Docker Compose · GitHub Container Registry |
+
+## 设计原则
+
+1. **召回优先，绝不静默丢弃。** 失败模式不是「总结得不好」，而是「该看到的没看到」。
+   大模型是抽取器，不是裁判。
+2. **原始消息最先落库。** QQ 不会重发，所以消息先存进后端，之后才下载附件、调模型。
+   后面任何一步崩了都能重来。
+3. **系统必须暴露自己的盲区。** 要能回答「今天有多少条被丢弃、丢在哪一步、
+   哪些群断线了」，否则无法区分「今天没通知」和「系统瞎了」。
+4. **bot 不保存需要跨重启存活的状态。** 待确认、编号映射、摘要发送记录全在后端，
+   bot 容器随时可以删掉重建。
+
+## 明确不做
+
+- 实时推送（那是又一次打断）
+- 微信个人号自动化（封的是个人主号）
+- 水群 / 公众号 / 媒体的信息处理（信噪比太低，只处理官方通知）
+- 全自动理解一切（人保留否决权）
 
 ## 快速开始
 
-**前置**：`dist/` 已构建好，NapCat 已安装并登录 QQ。
+**前置**：NapCat 已安装并登录 QQ（见下面「接 NapCat」）。
 
 ```bash
 git clone https://github.com/Xqy1y4ever/xcollector-deploy.git
@@ -68,11 +112,17 @@ docker compose up -d
 docker compose ps
 ```
 
-`preflight.sh` 只读，不改任何东西、不拉镜像、不起容器。它会检查 .env 是否完整、
+`preflight.sh` 只读，不改任何东西、不拉镜像、不起容器。它会检查 `.env` 是否完整、
 两个令牌是否配好且不同、宿主机端口有没有被占（并告诉你是谁占的）、镜像能否拉到。
 退出码 0 表示可以启动。
 
 最后把 `dist/` 交给 web server 并加上两条反代（见下一节），打开页面登录即可。
+
+### 只想先跑通，不想装 NapCat
+
+bot 的 `app/tools/feed_event.py` 可以喂一条假事件走完整流水线，不需要 NapCat，
+也不消耗大模型调用（`--extractor rule`）。详见
+[bot 仓库的自检一节](https://github.com/Xqy1y4ever/xcollector-bot#自检)。
 
 ## 托管 dist
 
@@ -184,67 +234,6 @@ Caddy 默认就会转发 `Authorization` 头，不用额外配置。
 不想装 web server 也可以：在 `xcollector-web` 里跑 `npm run dev`，
 它的开发代理已经内置了上面三条规则。配合 Tailscale 就能从手机访问。
 
-## 镜像
-
-默认从 GHCR 拉，在 `.env` 里配：
-
-```env
-IMAGE_BACKEND=ghcr.io/xqy1y4ever/xcollector-backend
-IMAGE_BOT=ghcr.io/xqy1y4ever/xcollector-bot
-VERSION=latest          # 或固定成某个 tag
-PULL_POLICY=missing     # missing=本地没有才拉；always=每次 up 都拉最新
-```
-
-> 镜像路径必须**全小写**。GHCR 不接受大写，哪怕 GitHub 用户名含大写字母
-> （`Xqy1y4ever` 要写成 `xqy1y4ever`）。
-
-两个源码仓库各带一份 CI 工作流，推到 GitHub 后自动构建推送：推 `main` 出
-`latest` + `sha-<短哈希>`，打 `v1.2.3` 这样的 tag 出正式版本。
-
-**首次推送后要去 Packages 页面设一下可见性。** 设成 private 的话部署机要先登录：
-
-```bash
-echo <你的PAT，至少带 read:packages> | docker login ghcr.io -u Xqy1y4ever --password-stdin
-```
-
-### 从源码构建（可选）
-
-两个源码仓库和本仓库放在同级目录时：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-```
-
-## 配置
-
-- **`xcollector-deploy/.env`** —— 跨服务与业务配置（令牌、白名单、抽取模式、
-  每日摘要、指令、端口）。这份文件同时喂给 backend 和 bot，每个进程只读自己认识的键。
-- **`docker-compose.yml` 的 `environment`** —— 容器内部的地址
-  （`BACKEND_BASE_URL` 用服务名 `http://backend:8000`、监听地址用 `0.0.0.0`）。
-  这些不要写进 `.env`，写了也会被覆盖。
-
-全部配置项见 [`.env.example`](.env.example)。
-
-### 两个令牌
-
-| 令牌 | 谁用 | 能做什么 |
-|---|---|---|
-| `API_TOKEN` | 只有 bot（在服务器上） | 全部：入库、改机器字段、删除、发 QQ 消息 |
-| `WEB_API_TOKEN` | 前端登录页（浏览器里） | 只能读、提交人工修正、标记已读 |
-
-网页令牌必须交给登录页，所以任何能打开网页的人都能拿到它。**两个令牌配成同一个值，
-分级就完全失效** —— `preflight.sh` 会直接报错，启动日志也会警告。
-
-即使正确配置了，它**仍然是一个共享密钥**而不是账号体系：所有拿同一个网页令牌登录
-的人权限完全一样，没有审计、没法单独吊销某个人；而且**读权限本身也是信息**，
-所有原始消息和附件都能被看到。所以：
-
-- **不要把页面暴露到公网**，并且**上 HTTPS**（明文 HTTP 下令牌在网线上是裸的）
-- 要对外提供服务，就在前面套一层真正的认证（带登录的反向代理 / VPN / Tailscale）
-
-> 前端仓库里的 `VITE_API_TOKEN` 是「预置令牌」的降级路径，方便不用登录页的
-> 开发 / CI 场景。**正常部署不要填** —— 一旦填了，令牌会明文躺在 `dist/assets/*.js` 里。
-
 ## 接 NapCat
 
 NapCat 不在这份编排里 —— 它要跑在有 QQ 客户端的地方（通常就是宿主机），
@@ -275,6 +264,71 @@ NapCat 不在这份编排里 —— 它要跑在有 QQ 客户端的地方（通�
 
 **没有别的东西也在连同一个 NapCat。** 如果有旧版后端还在跑，同一个 QQ 账号的
 消息会被两条链路各收一份、**重复入库**。正确顺序：停旧后端 → 起这套 → 起 bot。
+
+## 配置
+
+- **`xcollector-deploy/.env`** —— 跨服务与业务配置（令牌、白名单、抽取模式、
+  每日摘要、指令、端口）。这份文件同时喂给 backend 和 bot，每个进程只读自己认识的键。
+- **`docker-compose.yml` 的 `environment`** —— 容器内部的地址
+  （`BACKEND_BASE_URL` 用服务名 `http://backend:8000`、监听地址用 `0.0.0.0`）。
+  这些不要写进 `.env`，写了也会被覆盖。
+
+全部配置项见 [`.env.example`](.env.example)。
+
+宿主机侧的三个端口都能在 `.env` 里改（`BACKEND_HOST_PORT` / `BOT_HOST_PORT` /
+`ONEBOT_HOST_PORT`）。容器之间走 compose 内网，不经过宿主机端口，
+所以改了不影响容器间通信 —— 只要把反向代理指到新端口。
+
+### 两个令牌
+
+| 令牌 | 谁用 | 能做什么 |
+|---|---|---|
+| `API_TOKEN` | 只有 bot（在服务器上） | 全部：入库、改机器字段、删除、发 QQ 消息 |
+| `WEB_API_TOKEN` | 前端登录页（浏览器里） | 只能读、提交人工修正、标记已读 |
+
+网页令牌必须交给登录页，所以任何能打开网页的人都能拿到它。**两个令牌配成同一个值，
+分级就完全失效** —— `preflight.sh` 会直接报错，启动日志也会警告。
+
+即使正确配置了，它**仍然是一个共享密钥**而不是账号体系：所有拿同一个网页令牌登录
+的人权限完全一样，没有审计、没法单独吊销某个人；而且**读权限本身也是信息**，
+所有原始消息和附件都能被看到。所以：
+
+- **不要把页面暴露到公网**，并且**上 HTTPS**（明文 HTTP 下令牌在网线上是裸的）
+- 要对外提供服务，就在前面套一层真正的认证（带登录的反向代理 / VPN / Tailscale）
+
+> 前端仓库里的 `VITE_API_TOKEN` 是「预置令牌」的降级路径，方便不用登录页的
+> 开发 / CI 场景。**正常部署不要填** —— 一旦填了，令牌会明文躺在 `dist/assets/*.js` 里。
+
+## 镜像
+
+默认从 GHCR 拉，在 `.env` 里配：
+
+```env
+IMAGE_BACKEND=ghcr.io/xqy1y4ever/xcollector-backend
+IMAGE_BOT=ghcr.io/xqy1y4ever/xcollector-bot
+VERSION=latest          # 或固定成某个 tag
+PULL_POLICY=missing     # missing=本地没有才拉；always=每次 up 都拉最新
+```
+
+> 镜像路径必须**全小写**。GHCR 不接受大写，哪怕 GitHub 用户名含大写字母
+> （`Xqy1y4ever` 要写成 `xqy1y4ever`）。
+
+两个源码仓库各带一份 CI 工作流，推到 GitHub 后自动构建推送：推 `main` 出
+`latest` + `sha-<短哈希>`，打 `v1.2.3` 这样的 tag 出正式版本。
+
+**首次推送后要去 Packages 页面设一下可见性。** 设成 private 的话部署机要先登录：
+
+```bash
+echo <你的PAT，至少带 read:packages> | docker login ghcr.io -u Xqy1y4ever --password-stdin
+```
+
+### 从源码构建（可选）
+
+三个仓库放在同级目录时：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ## 数据与备份
 
@@ -331,3 +385,7 @@ docker compose exec bot python -m app.tools.check_llm       # 模型配置能不
 - `API_TOKEN` 留空时后端不校验任何请求，启动时会警告 —— 只适合完全可信的本机
 - backend / bot 只绑 `127.0.0.1`，暴露面只有你自己部署的反向代理
 - 两个容器都带 `no-new-privileges`
+
+## 许可
+
+MIT
