@@ -1,16 +1,17 @@
-# Xcollector 三件套的编排（**拉取镜像**模式）
+# Xcollector 的编排（后端 + bot）
 #
-#   web  ──/api──▶ backend(SQLite + 附件)          ← 纯数据层
-#     └──/bot──▶ bot ──OneBot WS──▶ NapCat(宿主机)
+#   xcollector-web **不在这里** —— 它只负责产出 dist/，不参与运行时。
+#   你需要自己用一个 web server 托管 dist/，并把两个前缀反代到本编排发布的端口：
 #
-# 这份文件**只拉镜像、不构建**：docker compose up 会从下面的镜像地址取。
-# 想在本地从源码构建，叠加 docker-compose.build.yml：
-#     docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#       /      → dist/ 静态文件
+#       /api/  → 127.0.0.1:8000   （后端，前缀保留）
+#       /bot/  → 127.0.0.1:8082   （bot，**必须摘掉 /bot 前缀**）
 #
-# 三条设计意图，不是随手写的：
-#   1. 只有 web 对外开端口。backend 与 bot 绑在 127.0.0.1，不进公网。
-#   2. 只有一个共享密钥 API_TOKEN，认证在前端登录页做（nginx 原样透传）。
-#   3. backend 的数据挂命名卷 —— SQLite 和附件是唯一不可再生的东西。
+#   静态文件与这两个反代必须**同源**（同一个 host:port），否则浏览器会跨域。
+#   现成配置见 README「托管 dist」一节（nginx 与 Caddy 各一份）。
+#
+#   这份文件只拉镜像、不构建。想在本地从源码构建，叠加 docker-compose.build.yml：
+#       docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 #
 # 用法：cp .env.example .env 后改几项，再 docker compose up -d
 # 详见 README.md
@@ -21,7 +22,6 @@ name: xcollector
 # 注意：**GHCR 的镜像路径必须全小写**，用户名里的 X 要写成 x。
 x-backend-image: &backend-image "${IMAGE_BACKEND:-ghcr.io/xqy1y4ever/xcollector-backend}:${VERSION:-latest}"
 x-bot-image: &bot-image "${IMAGE_BOT:-ghcr.io/xqy1y4ever/xcollector-bot}:${VERSION:-latest}"
-x-web-image: &web-image "${IMAGE_WEB:-ghcr.io/xqy1y4ever/xcollector-web}:${VERSION:-latest}"
 
 services:
   # ---------------- 纯数据层 ----------------
@@ -44,11 +44,11 @@ services:
     volumes:
       - backend-data:/app/data
     ports:
-      # 只绑本机：方便你 curl 调试，但不暴露到局域网/公网。
-      # 想去掉这个映射直接删掉整段 ports 即可（web 仍能通过内部网络访问它）。
+      # 绑本机：你的 web server 在同一台机器上反代它。
+      # 如果 web server 在别的机器上，改成 "0.0.0.0:8000:8000" —— 但先想清楚
+      # 网络边界：后端不带 TLS，直接暴露出去等于数据裸奔。
       - "127.0.0.1:8000:8000"
     networks: [xcollector]
-    # 镜像里已有 HEALTHCHECK，这里不用重复定义
     security_opt:
       - no-new-privileges:true
 
@@ -69,10 +69,11 @@ services:
       ONEBOT_LISTEN_HOST: 0.0.0.0
       TZ: ${TZ:-Asia/Shanghai}
     ports:
-      # 8082（bot 的 HTTP API）**不对外开** —— 只有 web 的 nginx 需要访问它，
-      # 走内部网络即可。
-      # 8081 只在 ONEBOT_MODE=server（NapCat 反向连过来）时才需要，
-      # 而且那条连接来自宿主机，所以必须发布：
+      # 8082：bot 的 HTTP API。前端「系统状态」页要调它，所以**必须发布** ——
+      # 以前是同网络的 nginx 走内部访问，现在没有那一层了。
+      - "127.0.0.1:8082:8082"
+      # 8081：只在 ONEBOT_MODE=server（NapCat 反向连过来）时才需要，
+      # 那条连接来自宿主机，所以也要发布。
       - "127.0.0.1:8081:8081"
     extra_hosts:
       # 让容器能用 host.docker.internal 指到宿主机（Linux 上需要这一行，
@@ -81,32 +82,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    networks: [xcollector]
-    security_opt:
-      - no-new-privileges:true
-
-  # ---------------- 展示层 + 反向代理 ----------------
-  web:
-    image: *web-image
-    container_name: xcollector-web
-    restart: unless-stopped
-    pull_policy: ${PULL_POLICY:-missing}
-    environment:
-      # 当前 nginx 模板**不再注入** Authorization，认证由前端登录页承担
-      # （模板里只保留了注释形式的注入方案）。
-      # 这个变量仍然要定义：一旦你把模板里那行注释打开，envsubst 就需要它；
-      # 而且缺了它模板里的 ${API_TOKEN} 会原样留下，nginx 会当成未知变量启动失败。
-      API_TOKEN: ${API_TOKEN:-}
-      TZ: ${TZ:-Asia/Shanghai}
-    ports:
-      # 默认所有网卡都开，这样手机/平板也能看。
-      # 只想本机访问就改成 "127.0.0.1:${WEB_PORT:-8080}:80"
-      - "${WEB_PORT:-8080}:80"
-    depends_on:
-      backend:
-        condition: service_started
-      bot:
-        condition: service_started
     networks: [xcollector]
     security_opt:
       - no-new-privileges:true
@@ -121,7 +96,7 @@ networks:
     driver: bridge
 
 # ---------------------------------------------------------------------------
-# NapCat 不在这份 compose 里，这是刻意的
+# NapCat 也不在这份编排里，这是刻意的
 #
 # NapCat 要跑在有 QQ 客户端的地方，通常就是你的宿主机或另一台机器，而且它的
 # 安装/登录本来就由你自己完成。两种接法：

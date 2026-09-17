@@ -1,29 +1,34 @@
 # Xcollector 部署编排
 
-用 Docker Compose 把三个服务组织起来。**只需要一个对外端口**（默认 8080）。
+用 Docker Compose 把**后端和 bot** 组织起来。
 
 ```
-浏览器 ──▶ web (nginx) ──┬── /api/  ──▶ backend   ← 纯数据层，SQLite + 附件（挂在卷上）
-                          └── /bot/  ──▶ bot       ← 处理消息，连 OneBot
-                                            │
-                                            ▼
-                                    NapCat（宿主机，你自己装）
+浏览器 ──▶ 你的 web server ──┬── /      ──▶ dist/   ← 前端构建产物，静态文件
+                              ├── /api/  ──▶ backend ← 纯数据层，SQLite + 附件（挂在卷上）
+                              └── /bot/  ──▶ bot     ← 处理消息，连 OneBot
+                                                │
+                                                ▼
+                                        NapCat（宿主机，你自己装）
 ```
 
-| 服务 | 作用 | 对外端口 |
+**前端不在这份编排里。** `xcollector-web` 只负责产出 `dist/`，不带容器、不带 nginx。
+你需要自己用一个 web server 托管静态文件，并把两个前缀反代到下面两个端口 ——
+三者**必须同源**（同一个 host:port），否则浏览器会跨域。
+
+| 服务 | 作用 | 发布到 |
 |---|---|---|
-| `web` | 静态站点 + 反向代理，并在这个位置**注入 Authorization 头** | `${WEB_PORT:-8080}` |
-| `backend` | 纯数据层。所有增删查改、附件存取 | 仅 `127.0.0.1:8000`（调试用） |
-| `bot` | 处理消息：接 OneBot、筛选、抽取、digest、私聊指令 | 仅 `127.0.0.1:8081`（反向 WS 用） |
+| `backend` | 纯数据层。所有增删查改、附件存取 | `127.0.0.1:8000` |
+| `bot` | 处理消息：接 OneBot、筛选、抽取、digest、私聊指令 | `127.0.0.1:8082`（HTTP API）、`127.0.0.1:8081`（反向 WS） |
 
-`bot` 的 HTTP API（8082）**不对外开** —— 只有 web 的 nginx 需要访问它，走内部网络。
+> 这两个端口以前是不对外开的（由同网络的 nginx 走内部访问）。**现在必须发布**，
+> 因为你的 web server 要靠它们反代。
 
 ## 快速开始
 
-**前置**：三个镜像要先在 GHCR 上存在（见下一节）。只克隆这个仓库就够了，
-不需要源码 —— 主 compose 是**拉取**模式。
+**前置**：两个镜像要先在 GHCR 上存在（见下一节）；`dist/` 要先构建好。
 
 ```bash
+# 1) 起后端和 bot
 cd xcollector-deploy
 cp .env.example .env
 # 至少改这几项：
@@ -31,15 +36,93 @@ cp .env.example .env
 #   GROUP_WHITELIST=<你的官方通知群号>
 #   ONEBOT_WS_URL / ONEBOT_MODE=<按下面的 NapCat 说明>
 
-docker compose pull          # 拉三个镜像
+docker compose pull
 docker compose up -d
 docker compose ps
+
+# 2) 构建前端并托管 dist/
+cd ../xcollector-web
+npm ci && npm run build          # 产出 dist/
 ```
 
-打开 `http://<主机>:8080`，**用 `.env` 里的 `API_TOKEN` 登录**（首次会跳到一个登录页）。
-如果 `API_TOKEN` 留空，后端不校验，登录页随便填或留空都能进 —— 那只适合完全可信的本机环境。
+然后把 `dist/` 交给你的 web server，按下一节的配置加上两条反代。
+打开页面后用 `.env` 里的 `API_TOKEN` 登录。
 
 **先用 `EXTRACTOR=rule` 跑通，再接 LLM。**
+
+## 托管 dist
+
+前端产物是**纯静态站点**。用哪个 web server 都行，关键是三条规则：
+
+| 路径 | 动作 |
+|---|---|
+| `/` | 静态文件；找不到就回 `index.html`（SPA 路由） |
+| `/api/` | 反代到 `127.0.0.1:8000`，**前缀保留** |
+| `/bot/` | 反代到 `127.0.0.1:8082`，**前缀要摘掉** |
+
+并且**原样转发**浏览器带的 `Authorization` 头 —— 认证在前端登录页做，
+代理里一旦无条件注入服务端 token，登录页就形同虚设。
+
+### nginx
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+    root /path/to/xcollector-web/dist;
+    index index.html;
+    client_max_body_size 8m;
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+    location / {
+        try_files $uri $uri/ /index.html;      # SPA fallback
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;      # 结尾不带 /，前缀保留
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+    }
+
+    location /bot/ {
+        proxy_pass http://127.0.0.1:8082/;     # 结尾带 /，前缀被摘掉
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+    }
+}
+```
+
+### Caddy
+
+```caddy
+:80 {
+    root * /path/to/xcollector-web/dist
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+    handle /bot/* {
+        uri strip_prefix /bot
+        reverse_proxy 127.0.0.1:8082
+    }
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
+}
+```
+
+> Caddy 默认就会转发 `Authorization` 头，不用额外配置。
+
+### 只想本机/局域网看？
+
+不想装 web server 也可以：在 `xcollector-web` 里跑 `npm run dev`，
+它的 dev 代理已经内置了上面三条规则。配合 Tailscale 就能从手机访问。
 
 ## 镜像从哪来
 
@@ -48,18 +131,17 @@ docker compose ps
 ```env
 IMAGE_BACKEND=ghcr.io/xqy1y4ever/xcollector-backend
 IMAGE_BOT=ghcr.io/xqy1y4ever/xcollector-bot
-IMAGE_WEB=ghcr.io/xqy1y4ever/xcollector-web
 VERSION=latest          # 或固定成 CI 推上来的某个 tag
 PULL_POLICY=missing     # missing=本地没有才拉；always=每次 up 都拉最新
 ```
 
 > ⚠ **镜像路径必须全小写。** GHCR 不接受大写，哪怕 GitHub 用户名含大写字母：
 > `Xqy1y4ever` 必须写成 `xqy1y4ever`，否则会报
-> `repository name must be lowercase`。三个仓库里的 CI 已经显式做了小写化。
+> `repository name must be lowercase`。两个仓库里的 CI 已经显式做了小写化。
 
 ### 发布镜像
 
-三个源码仓库各带一份 `.github/workflows/docker.yml`，推到 GitHub 后自动构建推送：
+**后端与 bot** 两个仓库各带一份 `.github/workflows/docker.yml`，推到 GitHub 后自动构建推送：
 
 | 触发 | 推的 tag |
 |---|---|
@@ -68,16 +150,19 @@ PULL_POLICY=missing     # missing=本地没有才拉；always=每次 up 都拉�
 | 打 `v1.2.3` 这样的 tag | `1.2.3` / `1.2` / `latest` |
 | 手动 `workflow_dispatch` | 同上 |
 
-**首次推送后要去 GitHub 的 Packages 页面把三个包的可见性设一下。**
+**首次推送后要去 GitHub 的 Packages 页面把两个包的可见性设一下。**
 设成 private 的话，部署机上要先登录：
 
 ```bash
 echo <你的PAT，至少带 read:packages> | docker login ghcr.io -u Xqy1y4ever --password-stdin
 ```
 
+> `xcollector-web` **没有** CI 工作流 —— 它不产出镜像。前端的分发方式就是
+> `npm ci && npm run build` 出来的 `dist/` 目录。
+
 ### 从源码构建（可选）
 
-三个源码仓库和 `xcollector-deploy` 放在**同级目录**时：
+两个源码仓库和 `xcollector-deploy` 放在**同级目录**时：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
@@ -131,15 +216,15 @@ Docker Desktop 自带）。NapCat 在别的机器上就换成那台的 IP。
 
 契约里整套系统只有**一个**共享密钥：bot 递出、后端校验。前端在登录页让你输入它。
 
-**认证在哪儿做，二选一，效果完全不同：**
+**认证做在哪一层，效果完全不同：**
 
-| 方案 | nginx 模板里 | 效果 |
+| 做法 | 代理里怎么写 | 效果 |
 |---|---|---|
-| **前端登录（当前默认）** | `proxy_set_header Authorization $http_authorization;` | 浏览器带上用户输入（并存在 storage 里）的 token。**不进 JS bundle**，也不是"谁都能进"。 |
-| 服务端注入 | `proxy_set_header Authorization "Bearer ${API_TOKEN}";`（模板里已写成注释） | 谁都能进 —— 不带 Authorization 的请求也会被补上正确的 token。**前端登录形同虚设**。内网、图省事时可用。 |
+| **前端登录（默认）** | `proxy_set_header Authorization $http_authorization;` | 浏览器带上用户输入（存在 storage 里）的 token。**不进 JS bundle**，也不是"谁都能进"。 |
+| 服务端注入 | `proxy_set_header Authorization "Bearer <token>";` | 谁都能进 —— 不带 Authorization 的请求也会被补上正确的 token。**前端登录形同虚设**。只在完全可信的内网、图省事时用。 |
 
-默认选前者。要换成后者，编辑 `xcollector-web/nginx.conf.template` 里 `/api/` 那段
-（`/bot/` 同样），然后 `docker compose build web && docker compose up -d web`。
+默认是前者。要换成后者，改你自己 web server 的配置即可（**不是**改这个仓库 ——
+这里已经没有 nginx 层了）。
 
 ### 前端登录能力的边界（别高估它）
 
@@ -147,11 +232,12 @@ Docker Desktop 自带）。NapCat 在别的机器上就换成那台的 IP。
   没有审计、没有分级
 - token 存在浏览器 storage 里，**任何能在这台浏览器上执行 JS 的东西都能读到**，
   XSS 会泄露它
-- 所以：**真正的边界仍然是不要把 8080 暴露到公网**。要对外提供服务，就在前面套
+- 所以：**真正的边界仍然是不要把页面暴露到公网**。要对外提供服务，就在前面套
   一层真正的认证（带登录的反向代理 / VPN / Tailscale 之类的私有网络）
 
 > 前端仓库里也有 `VITE_API_TOKEN`，那是「预置令牌」的降级路径：环境变量有值而
-> 登录态为空时直接用它，方便不用登录页的开发/CI 场景。Dockerfile 里刻意留空。
+> 登录态为空时直接用它，方便不用登录页的开发/CI 场景。**正常部署不要填** ——
+> 一旦填了，token 会明文躺在 `dist/assets/*.js` 里。
 
 ## 数据与备份
 
@@ -208,8 +294,8 @@ docker compose exec bot python -m tests.check_location         # 地点抽取回
 
 - `COMMAND_WHITELIST` 默认**留空 = 谁都不能发指令**（不是"谁都能"）
 - `API_TOKEN` 留空时后端不校验，README 和启动日志都会警告 —— 只适合完全可信的本机
-- backend / bot 只绑 `127.0.0.1`
-- 三个容器都带 `no-new-privileges`
+- backend / bot 只绑 `127.0.0.1`（**前端产物和反代由你自己部署，那才是暴露面**）
+- 两个容器都带 `no-new-privileges`
 - `.dockerignore` 排除了 `data/`，真实库和附件不会被烤进镜像
 
 ## 验证状态（如实说明）
@@ -217,17 +303,19 @@ docker compose exec bot python -m tests.check_location         # 地点抽取回
 这套编排是在**没有安装 Docker 的机器上**写的，因此：
 
 - ✅ YAML 语法、锚点解析、镜像名大小写、构建上下文与 CI 小写化都经过静态检查
-- ✅ 三个容器里跑的命令与配置项，都是本机原生跑通过的（后端 179 条接口断言、
+- ✅ 两个容器里跑的命令与配置项，都是本机原生跑通过的（后端 179 条接口断言、
   bot 136 条端到端断言、前端 `npm run build` 通过）
 - ❌ **没有真正 `docker compose up` 或 `docker compose pull` 跑过** ——
   镜像能不能构建推送、容器网络是否如预期，都需要你在有 Docker 的机器上确认
+- ❌ **README 里那两份 nginx / Caddy 配置没有实跑过** —— 语法是照标准写的，
+  但没在真实 web server 上验证过
 
 第一次跑如果出问题，按这个顺序排查：
 
-1. **GHCR 上有没有镜像** —— Packages 页面能看到三个包吗？private 的话部署机
+1. **GHCR 上有没有镜像** —— Packages 页面能看到两个包吗？private 的话部署机
    登录了吗？（`docker compose pull` 会直接报 `denied` 或 `manifest unknown`）
 2. **CI 有没有跑成功** —— 仓库的 Actions 页签。失败最常见的原因是镜像名带大写。
-3. **`web` 容器的 nginx 有没有起来** —— `docker compose logs web`，
-   envsubst 渲染失败会在这里报。
+3. **你的反代有没有把 `/bot` 前缀摘掉** —— 这是最容易写错的一处。
+   反代配错的表现是状态页报错、而通知列表正常（因为 `/api` 不用摘前缀）。
 4. **`bot` 能不能解析 `host.docker.internal`** —— `docker compose logs bot`，
    连不上 NapCat 不会让 bot 崩，只会让它收不到消息。
