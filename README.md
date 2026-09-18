@@ -372,9 +372,11 @@ docker compose exec bot python -m app.tools.check_llm       # 模型配置能不
 
 | 现象 | 原因与处理 |
 |---|---|
+| **改了 `.env` 但不生效**（日志里还是旧地址 / 旧配置） | 容器的环境变量在**创建那一刻**就固定了。`docker compose restart` 只是重启进程，**不会**重读 `.env`；compose 认为服务定义没变时 `up -d` 也不会重建。用 `docker compose up -d --force-recreate bot`。`sh preflight.sh` 会直接把「容器里实际拿到的值」和「`.env` 里写的值」对出来 |
 | `up` 时报 `failed to bind host port ... address already in use` | 宿主机端口被占。`sh preflight.sh` 会告诉你占用者；或在 `.env` 里改 `BACKEND_HOST_PORT` / `BOT_HOST_PORT`，并同步改反向代理 |
 | `pull` 报 `denied` / `manifest unknown` | GHCR 上的包是 private 而部署机没登录，或镜像名含大写 |
 | 页面显示「bot 未运行或不可达」 | `docker compose logs bot`，多半是 `ONEBOT_WS_URL` 连不上 NapCat（不会让 bot 崩，只是收不到消息） |
+| 日志里「已连接」之后**立刻**断开 | NapCat 的 WebSocket 服务器配了 Token，而 `ONEBOT_ACCESS_TOKEN` 没填或不一致。以 NapCat 自己的日志为准；也可把 token 写在 URL 上：`ws://host.docker.internal:3001/?access_token=<token>` |
 | 页面能开但列表空、状态页说「后端不可达」 | backend 没起来，或 `API_TOKEN` 不一致 |
 | 状态页报错但通知列表正常 | 反代没把 `/bot` 前缀摘掉（`/api` 不用摘，所以只有状态页坏） |
 | 证据图片显示不出来 | `ATTACHMENT_URL_TTL` 被设成了 0，附件签名链接失效 |

@@ -187,6 +187,71 @@ case "$TTL_V" in
     ;;
 esac
 
+# --------------------------------------------------------------------------
+# 运行中的容器拿到的是不是这份 .env 里的值？
+#
+# 容器的环境变量在**创建那一刻**就固定了：`docker compose restart` 只是重启进程，
+# 不会重读 .env；`docker compose up -d` 在 compose 认为服务定义没变时也不会重建。
+# 于是"改了 .env 却没生效"成了最难查的一类问题 —— 程序看起来"没读到 .env"，
+# 其实是容器里装的还是旧值。
+#
+# 这里直接拿容器实际的 env 和 .env 比。（用 docker inspect 而不是 exec：
+# inspect 是纯读，不会在容器里起进程。）
+# --------------------------------------------------------------------------
+if docker compose ps -q bot >/dev/null 2>&1; then
+  BOT_CID=$(docker compose ps -q bot 2>/dev/null | head -n 1)
+else
+  BOT_CID=''
+fi
+
+if [ -n "$BOT_CID" ]; then
+  C_ENV=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$BOT_CID" 2>/dev/null)
+
+  if [ -z "$C_ENV" ]; then
+    # inspect 失败 / 拿不到环境：绝不能当成"全都不一致"报出去 —— 那是假警报。
+    warn "读不到运行中 bot 容器的环境变量，跳过一致性检查"
+    note "手动确认： docker compose exec bot printenv ONEBOT_WS_URL ONEBOT_ACCESS_TOKEN"
+    C_ENV=''
+  else
+    # 只比这些键：它们应该来自 .env，而且**没有**被 docker-compose.yml 的
+    # environment 段覆盖。BACKEND_BASE_URL / *_LISTEN_* / TZ 是被覆盖的（那是刻意的），
+    # 比了必然"不一致"，只是噪音。
+    COMPARE_KEYS="ONEBOT_MODE ONEBOT_WS_URL ONEBOT_ACCESS_TOKEN EXTRACTOR GROUP_WHITELIST DIGEST_ENABLED API_TOKEN WEB_API_TOKEN"
+    SECRET_KEYS=" ONEBOT_ACCESS_TOKEN API_TOKEN WEB_API_TOKEN "
+
+    STALE=0
+    STALE_KEYS=''
+    for _k in $COMPARE_KEYS; do
+      _want=$(env_get "$_k" '')
+      _got=$(printf '%s\n' "$C_ENV" | sed -n "s/^${_k}=//p" | head -n 1)
+      [ "$_want" = "$_got" ] && continue
+      STALE=$((STALE + 1))
+      STALE_KEYS="$STALE_KEYS $_k"
+    done
+
+    if [ "$STALE" -gt 0 ]; then
+      bad "运行中的 bot 容器里有 $STALE 项配置与 .env 不一致"
+      for _k in $STALE_KEYS; do
+        case "$SECRET_KEYS" in
+          *" $_k "*)
+            note "$_k：两边不一致（值已隐去）"
+            ;;
+          *)
+            _want=$(env_get "$_k" '')
+            _got=$(printf '%s\n' "$C_ENV" | sed -n "s/^${_k}=//p" | head -n 1)
+            note "$_k：容器里是 '${_got}'，.env 里是 '${_want}'"
+            ;;
+        esac
+      done
+      note "原因：容器的环境变量在**创建那一刻**就固定了，改 .env 不会自动同步。"
+      note "解决：docker compose up -d --force-recreate bot"
+      note "（docker compose restart 只是重启进程，**不会**重读 .env）"
+    else
+      ok "运行中的 bot 容器与 .env 一致"
+    fi
+  fi
+fi
+
 if [ -f docker-compose.yml ]; then
   if docker compose config >/dev/null 2>&1; then
     ok "docker compose config 解析通过"
