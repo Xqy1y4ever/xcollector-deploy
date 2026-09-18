@@ -27,6 +27,7 @@ name: xcollector
 # 注意：**GHCR 的镜像路径必须全小写**，用户名里的 X 要写成 x。
 x-backend-image: &backend-image "${IMAGE_BACKEND:-ghcr.io/xqy1y4ever/xcollector-backend}:${VERSION:-latest}"
 x-bot-image: &bot-image "${IMAGE_BOT:-ghcr.io/xqy1y4ever/xcollector-bot}:${VERSION:-latest}"
+x-client-image: &client-image "${IMAGE_CLIENT:-ghcr.io/xqy1y4ever/xcollector-client}:${VERSION:-latest}"
 
 services:
   # ---------------- 纯数据层 ----------------
@@ -93,6 +94,46 @@ services:
       # 让容器能用 host.docker.internal 指到宿主机（Linux 上需要这一行，
       # Docker Desktop for Windows/Mac 自带）
       - "host.docker.internal:host-gateway"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [xcollector]
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------- 入库客户端（可选）----------------
+  # 读一份**聊天记录数据库**（nt_msg_db_util 导出的 nt_msg_export.db），抽取通知后
+  # 用某个用户自己的 UserToken 写进后端。它不连 QQ，所以入库不再依赖活的 OneBot。
+  #
+  # 用 profile 关着，因为：
+  #   1. 它需要一个宿主机上的聊天记录库路径（`CLIENT_DB_HOST_PATH`），
+  #      没有这个文件的人不该被一个起不来的容器烦到；
+  #   2. 开了它就等于开了**第二条入库链路** —— 和 bot 同时跑会重复入库
+  #      （两边的 message_id 格式不同，现有幂等键拦不住），所以必须由人明确选。
+  #
+  # 怎么用：docker compose --profile client up -d
+  client:
+    image: *client-image
+    container_name: xcollector-client
+    restart: unless-stopped
+    profiles: ["client"]
+    env_file:
+      - .env
+    environment:
+      # 容器内走服务名；聊天记录库按下面的只读挂载挂在 /data 下
+      BACKEND_BASE_URL: http://backend:8000
+      CLIENT_DB_PATH: /data/nt_msg_export.db
+      CLIENT_ATTACHMENT_ROOT: /data/attachments
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # **只读**挂载：客户端绝不改动你的聊天记录库
+      - "${CLIENT_DB_HOST_PATH:?用 client profile 时必须配 CLIENT_DB_HOST_PATH}:/data/nt_msg_export.db:ro"
+      # 附件目录（可选）。没配时 compose 会建一个空目录，客户端会走降级路径
+      # （只留 CDN 地址并标注 degraded），不会静默少一张图。
+      - "${CLIENT_ATTACHMENT_HOST_PATH:-./attachments}:/data/attachments:ro"
+    # 批处理客户端：容器里用 --loop，间隔由 CLIENT_POLL_SECONDS 控制。
+    # 更愿意用宿主机的计划任务，就改成 ["--once"] 并去掉 restart。
+    command: ["--loop"]
     depends_on:
       backend:
         condition: service_healthy

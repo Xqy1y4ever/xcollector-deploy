@@ -181,6 +181,51 @@ if [ -n "$(env_get WEB_API_TOKEN '')" ]; then
   note "用户登录用的是注册时拿到的 UserToken（xc_ 开头），不是这个值。"
 fi
 
+# --------------------------------------------------------------------------
+# 入库客户端（可选，compose profile `client`）
+#
+# 它读宿主机上的一个聊天记录库，用**某个用户自己的 UserToken** 写后端。
+# 这里只检查"配了的话别配错"，没配就跳过 —— 它是可选的。
+# --------------------------------------------------------------------------
+CLIENT_DB=$(env_get CLIENT_DB_HOST_PATH '')
+CLIENT_TOK=$(env_get CLIENT_TOKEN '')
+if [ -n "$CLIENT_DB" ] || [ -n "$CLIENT_TOK" ]; then
+  if [ -z "$CLIENT_DB" ]; then
+    bad "配了 CLIENT_TOKEN 但没配 CLIENT_DB_HOST_PATH —— 客户端没有源库可读"
+  elif [ ! -f "$CLIENT_DB" ]; then
+    bad "CLIENT_DB_HOST_PATH 指向的文件不存在：$CLIENT_DB"
+    note "它要指向 nt_msg_db_util 的 **3.export.py** 产出的 nt_msg_export.db（明文 SQLite）。"
+    note "注意不是 nt_msg.db（加密），也不是 nt_msg_plain.db（正文还是 Protobuf）。"
+  else
+    ok "客户端源库存在：$CLIENT_DB"
+    case "$CLIENT_DB" in
+      *nt_msg_export.db) ;;
+      *) note "路径里没有 nt_msg_export.db —— 确认你给的是 3.export.py 的产物；给错了库客户端会明确报出来。" ;;
+    esac
+  fi
+
+  if [ -z "$CLIENT_TOK" ]; then
+    warn "配了 CLIENT_DB_HOST_PATH 但没配 CLIENT_TOKEN —— 客户端会以未认证身份请求，全部 401"
+  else
+    case "$CLIENT_TOK" in
+      xc_*) ok "客户端用的是 UserToken（xc_ 开头）" ;;
+      *)
+        warn "CLIENT_TOKEN 不是 xc_ 开头 —— 它看起来是**服务令牌**（API_TOKEN）"
+        note "用服务令牌跑客户端意味着那个容器能读写**所有人**的数据，与「每人一个客户端」相悖。"
+        note "正确做法：让用户在 QQ 里给机器人发 /注册，在网页上注册后拿到的 UserToken。"
+        ;;
+    esac
+  fi
+
+  # 两条入库链路同时开 = 同一条消息入库两次。
+  # 两边的 message_id 格式不同（OneBot 的 vs ntqq:<msg_id>），幂等键拦不住。
+  warn "客户端和 bot 会同时入库：同一条消息会变成两条原始记录 + 两条通知"
+  note "同一个 QQ 账号只能留一条入库链路。只用客户端的话，把 GROUP_WHITELIST 与"
+  note "SENDER_WHITELIST 留空（bot 就不处理任何消息），它仍然负责 /注册、/订阅、摘要推送。"
+else
+  note "没有配置入库客户端（compose 里用 --profile client 才启用）。"
+fi
+
 # 附件签名：设为 0 会让证据图静默 401（图片位置空着，不会报错）
 TTL_V=$(env_get ATTACHMENT_URL_TTL '3600')
 case "$TTL_V" in

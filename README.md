@@ -241,6 +241,60 @@ Caddy 默认就会转发 `Authorization` 头，不用额外配置。
 不想装 web server 也可以：在 `xcollector-web` 里跑 `npm run dev`，
 它的开发代理已经内置了 `/api/` 那条规则。配合 Tailscale 就能从手机访问。
 
+## 入库客户端（可选）：不连 QQ 也能入库
+
+除了 bot 走 OneBot 实时入库，还有一种**离线入库**方式：用
+[`xcollector-client`](https://github.com/Xqy1y4ever/xcollector-client) 读一份
+聊天记录数据库，抽取通知后写进后端。它不连 QQ，所以入库不再依赖活的 OneBot 连接。
+
+```
+NTQQ(nt_msg.db) ──nt_msg_db_util──▶ nt_msg_export.db ──▶ xcollector-client ──▶ backend
+```
+
+它是**可选**的，而且用 compose profile 关着（`docker compose --profile client up -d`）。
+
+### 怎么开
+
+```bash
+# 1. 用 nt_msg_db_util 把聊天记录导出成明文结构化库
+#    （1.decrypt.py → nt_msg_plain.db，再 3.export.py → nt_msg_export.db）
+
+# 2. 在 .env 里填三项
+CLIENT_DB_HOST_PATH=/绝对路径/nt_msg_export.db
+CLIENT_ATTACHMENT_HOST_PATH=/绝对路径/attachments   # 可选
+CLIENT_TOKEN=xc_...        # ← 某个用户的 UserToken，不是服务令牌
+
+# 3. 起
+docker compose --profile client up -d
+```
+
+`CLIENT_TOKEN` 从哪来：让用户在 QQ 里给机器人发 `/注册` 拿验证码，到网页上完成
+注册后得到。**它不是 `API_TOKEN`** —— 客户端就用那个用户自己的令牌，所以它写的
+每条数据都天然属于那个人（预检脚本会在你误填服务令牌时警告）。
+
+### ⚠️ 同一个账号只能有一条入库链路
+
+bot 和客户端**同时入库会重复**：同一条消息在两边的 `message_id` 格式不同
+（bot 用 OneBot 的，客户端用 `ntqq:<msg_id>`），现有的幂等键拦不住，于是变成
+两条原始记录 + 两条通知。
+
+两种干净的用法：
+
+| 想要 | 怎么做 |
+|---|---|
+| 只用客户端入库（不需要常驻 QQ） | 把 `GROUP_WHITELIST` / `SENDER_WHITELIST` 留空 → bot 不处理任何消息，只留着做 `/注册`、`/订阅`、摘要推送 |
+| 只用 bot 入库 | 别启用 client profile |
+
+### 它读的库必须是"结构化导出库"
+
+| 文件 | 能给客户端用吗 |
+|---|---|
+| `nt_msg.db` | ❌ SQLCipher 加密的原始库 |
+| `nt_msg_plain.db` | ❌ 解了密，但正文还是 Protobuf 原始列 |
+| **`nt_msg_export.db`** | ✅ 有 `group_messages` 表，`text` / `content` 都能直接读 |
+
+库是**只读**挂进容器的（`:ro`），客户端不会改动你的聊天记录。
+
 ## 接 NapCat
 
 NapCat 不在这份编排里 —— 它要跑在有 QQ 客户端的地方（通常就是宿主机），
