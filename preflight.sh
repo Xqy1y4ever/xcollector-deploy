@@ -172,10 +172,13 @@ case "$SIGNUP_MODE_V" in
 esac
 
 # 旧配置里可能还留着 WEB_API_TOKEN（多用户改造之前是"网页令牌"）。
-# 后端已经不认识它了 —— 现在每个用户注册时各自签发 UserToken。
+# **现在两个服务都不再读它了**：每个用户注册时各自签发 UserToken，
+# 而 bot 自己的 /api/* 只认管理令牌（API_TOKEN / BOT_API_TOKEN）。
+# 留着一个还在生效的共享网页令牌是最糟的状态 —— 这里刻意说清"它已经无效"。
 if [ -n "$(env_get WEB_API_TOKEN '')" ]; then
-  warn "WEB_API_TOKEN 已废弃 —— 后端不再读它（现在每人一个 UserToken）"
-  note "可以从 .env 里删掉了。留着不会报错，只是会让人以为它还在生效。"
+  warn "WEB_API_TOKEN 已废弃 —— 后端和 bot 都不再读它（现在每人一个 UserToken）"
+  note "请从 .env 里删掉。留着不会报错，但会让人以为还有这么一个共享令牌在生效。"
+  note "用户登录用的是注册时拿到的 UserToken（xc_ 开头），不是这个值。"
 fi
 
 # 附件签名：设为 0 会让证据图静默 401（图片位置空着，不会报错）
@@ -431,7 +434,10 @@ echo "接下来："
 echo "  docker compose up -d          # 后台启动"
 echo "  docker compose logs -f bot    # 看 bot 有没有连上 NapCat"
 echo
-echo "还没做的话别忘反向代理（/ 静态、/api/ 保留前缀、/bot/ 摘掉前缀），"
-echo "并把 /api/ 指向 127.0.0.1:${BACKEND_P}、/bot/ 指向 127.0.0.1:${BOT_P}。"
+echo "还没做的话别忘反向代理：/ 指向静态文件，/api/ 指向 127.0.0.1:${BACKEND_P}"
+echo "（前缀保留，并且要**原样转发 Authorization 头**）。"
+echo "bot 的 127.0.0.1:${BOT_P} **不要**反代到公网 —— 那是运营者的管理接口。"
+echo
+echo "第一次用要先注册：在 QQ 里给机器人发 /注册，再把验证码拿到网页上完成注册。"
 echo
 exit 0
