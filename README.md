@@ -58,6 +58,10 @@ cp .env.example .env
 # 3) 把 dist/ 交给你的 web server（见「托管 dist」），打开页面注册
 ```
 
+> 脚本带可执行位，直接 `./start.sh`。**如果报 `Permission denied`**，说明你的克隆里
+> 少了可执行位（Windows 上克隆、或旧版本的仓库会这样），二选一：
+> `chmod +x backend/*.sh bot/*.sh`，或者在任何地方都用 `sh ./start.sh`。
+
 生成服务令牌：
 
 ```bash
@@ -356,6 +360,7 @@ docker compose down            # 数据在同一个卷 xcollector_backend-data �
 
 | 现象 | 原因与处理 |
 |---|---|
+| `./start.sh: Permission denied` | 克隆里少了可执行位（Windows 上克隆会这样）。`chmod +x backend/*.sh bot/*.sh`，或直接用 `sh ./start.sh` |
 | `start.sh` 报「找不到 Docker 网络 xcollector」 | 还没起 backend。`cd ../backend && ./start.sh` |
 | **改了 `.env` 但不生效** | 容器的环境变量在**创建那一刻**就固定了。`./start.sh` 会重建容器（数据在卷里），`docker restart` 不会重读 `.env` |
 | 端口被占 / 容器起不来 | `./preflight.sh` 会告诉你是谁占的；或在 `.env` 里改 `BACKEND_HOST_PORT` / `BOT_HOST_PORT` |
