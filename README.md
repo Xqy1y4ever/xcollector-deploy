@@ -368,7 +368,7 @@ docker compose up -d
 ## 排查
 
 ```bash
-docker compose logs -f bot          # 每条消息一行日志
+docker compose logs -f bot          # 每条消息的处理轨迹：阶段=收到 → … → 结果=
 docker compose logs -f backend
 docker compose exec backend python -m tests.check_config    # 配置自检
 docker compose exec bot python -m app.tools.check_llm       # 模型配置能不能用（联网）
