@@ -6,7 +6,8 @@
 #     ./start.sh client         # 起离线客户端（可选，与 bot 的入库二选一）
 #
 # 前提：**先起 backend**（../backend/start.sh）。它建的那张 Docker 网络
-# （默认叫 xcollector）是 bot 找到后端的方式：BACKEND_BASE_URL=http://backend:8000。
+# （默认叫 xcollector）是 bot 找到后端的方式：BACKEND_BASE_URL 里的主机名要能在
+# 那张网络里解析 —— 默认写的是容器名 xcollector-backend。
 # 后端没起来时 bot 不会崩，只是头几秒的调用会失败、稍后自己接上。
 #
 # 不用 compose：两个容器各一条 `docker run`。想手动跑，等价命令见 README。
@@ -57,7 +58,10 @@ VERSION=$(env_get VERSION 'latest')
 PULL_POLICY=$(env_get PULL_POLICY 'always')
 BIND=$(env_get BOT_BIND '127.0.0.1')
 NETWORK=$(env_get XCOLLECTOR_NETWORK 'xcollector')
-BACKEND_URL=$(env_get BACKEND_BASE_URL 'http://backend:8000')
+# 默认用**容器名**：`docker run` 一定会把容器名注册成网络名，而 compose 的服务名
+# 别名（backend）不会自动有。backend 的 start.sh 现在两个名字都注册，所以写哪个都行；
+# 但默认用容器名更保险（旧容器、或以后换成别的编排方式都不会踩到）。
+BACKEND_URL=$(env_get BACKEND_BASE_URL 'http://xcollector-backend:8000')
 
 # ---- 那条网络必须已经存在（由 backend 的 start.sh 建）----
 if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
@@ -102,6 +106,7 @@ if [ "$TARGET" = "bot" ]; then
     --add-host host.docker.internal:host-gateway \
     --security-opt no-new-privileges:true \
     "$FULL_IMAGE" >/dev/null
+
 
   echo -n "等它变健康"
   i=0

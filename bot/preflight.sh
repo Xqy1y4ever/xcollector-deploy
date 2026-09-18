@@ -109,15 +109,60 @@ if docker network inspect "$NETWORK_V" >/dev/null 2>&1; then
 else
   bad "找不到 Docker 网络 $NETWORK_V —— **先起 backend**，是它建的这张网络"
   note "    cd ../backend && ./start.sh"
-  note "两个容器靠这张网络互相找到（BACKEND_BASE_URL=http://backend:8000）。"
+  note "两个容器靠这张网络互相找到（BACKEND_BASE_URL 里的主机名要能在它里面解析）。"
 fi
 
-BACKEND_URL_V=$(env_get BACKEND_BASE_URL 'http://backend:8000')
-case "$BACKEND_URL_V" in
-  http://backend:8000|http://backend:*)
-    note "BACKEND_BASE_URL=$BACKEND_URL_V（走内部网络；换过网络名的话这里要跟着改）" ;;
+BACKEND_URL_V=$(env_get BACKEND_BASE_URL 'http://xcollector-backend:8000')
+# 从 URL 里抠出主机名（去掉协议、路径、端口）。
+BACKEND_HOST=$(printf '%s' "$BACKEND_URL_V" | sed -e 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||' -e 's|/.*$||' -e 's|:.*$||')
+
+case "$BACKEND_HOST" in
+  ''|localhost|127.0.0.1)
+    warn "BACKEND_BASE_URL 指向 $BACKEND_URL_V —— 容器里的 localhost 是容器自己，不是后端"
+    note "两个容器之间要用**容器名**： http://xcollector-backend:8000"
+    ;;
+  *.*)
+    # 带点的当域名/IP：后端在别的机器上时正常，这里不做解析检查
+    note "BACKEND_BASE_URL=$BACKEND_URL_V（看起来是域名/IP —— 后端在别的机器上时这样是对的）"
+    ;;
   *)
-    note "BACKEND_BASE_URL=$BACKEND_URL_V（不是内部服务名 —— 后端在别的机器上时这样是对的）" ;;
+    # 单段主机名 → 必须能在 xcollector 网络里解析，否则运行时报
+    # `[Errno -2] Name or service not known`（指令报错、状态页说后端不可达）。
+    #
+    # ⚠️ 这里是踩过的坑：compose 会把**服务名**注册成网络别名，而 `docker run`
+    #    只注册**容器名**。所以 compose 时代写的 http://backend:8000 换成
+    #    docker run 之后就解析不了了。优先用真的解析一次来判定。
+    RESOLVED=0
+    if docker container inspect xcollector-bot >/dev/null 2>&1; then
+      # 最直接的判定：在 bot 容器里真解析一次
+      if docker exec xcollector-bot python -c \
+          "import socket,sys; socket.getaddrinfo('$BACKEND_HOST', 8000); sys.exit(0)" >/dev/null 2>&1; then
+        RESOLVED=1
+      fi
+    else
+      # bot 还没起：退一步看那张网络里有哪些名字（容器名 + 别名）
+      NAMES=$(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$NETWORK_V" 2>/dev/null)
+      for _c in $NAMES; do
+        NAMES="$NAMES$(docker inspect -f '{{range .NetworkSettings.Networks}}{{range .Aliases}}{{.}} {{end}}{{end}}' "$_c" 2>/dev/null)"
+      done
+      case " $NAMES " in
+        *" $BACKEND_HOST "*) RESOLVED=1 ;;
+      esac
+    fi
+
+    if [ "$RESOLVED" = "1" ]; then
+      ok "BACKEND_BASE_URL 的主机名 $BACKEND_HOST 能在网络 $NETWORK_V 里解析"
+    else
+      bad "BACKEND_BASE_URL 的主机名「$BACKEND_HOST」在 Docker 网络 $NETWORK_V 里解析不了"
+      note "运行时的表现是：指令报错、状态页说「后端不可达」，日志里是"
+      note "  ConnectError: [Errno -2] Name or service not known"
+      note "原因：compose 会把服务名注册成网络别名，而 docker run 只注册**容器名**。"
+      note "解决（任选一个）："
+      note "  1) 把 .env 里的 BACKEND_BASE_URL 改成 http://xcollector-backend:8000（推荐）"
+      note "  2) 重新起 backend（它的 start.sh 现在会带 --network-alias backend）："
+      note "     cd ../backend && ./start.sh"
+    fi
+    ;;
 esac
 echo
 

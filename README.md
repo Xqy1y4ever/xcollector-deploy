@@ -68,8 +68,8 @@ cp .env.example .env
 python3 -c "import secrets;print(secrets.token_hex(32))"
 ```
 
-**顺序有讲究**：网络 `xcollector` 由 backend 的 `start.sh` 创建，bot 靠它用服务名
-`backend` 找到后端。先起 bot 会直接报「找不到网络」并告诉你该去哪个目录。（后端没
+**顺序有讲究**：网络 `xcollector` 由 backend 的 `start.sh` 创建，bot 靠它用**容器名**
+`xcollector-backend` 找到后端。先起 bot 会直接报「找不到网络」并告诉你该去哪个目录。（后端没
 起来时 bot 也不会崩，只是头几秒的调用会失败、稍后自己接上。）
 
 ---
@@ -156,7 +156,7 @@ vi .env                 # API_TOKEN 填同一个值；两个白名单必填；ON
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `API_TOKEN` | 空 | 与 `backend/.env` **同一个值**（不一致 → 全部 401） |
-| `BACKEND_BASE_URL` | `http://backend:8000` | 走内部网络的服务名；后端在别的机器上时换成那台的地址 |
+| `BACKEND_BASE_URL` | `http://xcollector-backend:8000` | 两个容器之间走**容器名**；后端在别的机器上时换成那台的地址 |
 | `ONEBOT_MODE` / `ONEBOT_WS_URL` / `ONEBOT_ACCESS_TOKEN` | `client` / `host.docker.internal:3001` / 空 | OneBot 连接方式与凭据 |
 | `GROUP_WHITELIST` | 空 | 要处理的群，`群号:名称,群号:名称`。**留空 = 一个消息都不处理** |
 | `SENDER_WHITELIST` | 空 | 要处理的发送者，`QQ号:名称`。**留空 = 一个消息都不处理** |
@@ -240,7 +240,7 @@ docker exec xcollector-bot python -m app.tools.check_llm     # 模型配置能�
 ```bash
 docker run -d --name xcollector-bot --restart unless-stopped \
   --network xcollector --env-file .env \
-  -e BACKEND_BASE_URL=http://backend:8000 \
+  -e BACKEND_BASE_URL=http://xcollector-backend:8000 \
   -e BOT_LISTEN_HOST=0.0.0.0 -e BOT_LISTEN_PORT=8082 \
   -e ONEBOT_LISTEN_HOST=0.0.0.0 \
   -p 127.0.0.1:8082:8082 -p 127.0.0.1:8081:8081 \
@@ -361,6 +361,7 @@ docker compose down            # 数据在同一个卷 xcollector_backend-data �
 | 现象 | 原因与处理 |
 |---|---|
 | `./start.sh: Permission denied` | 克隆里少了可执行位（Windows 上克隆会这样）。`chmod +x backend/*.sh bot/*.sh`，或直接用 `sh ./start.sh` |
+| 指令报错 / 状态页说「后端不可达」，日志是 `ConnectError: [Errno -2] Name or service not known` | `BACKEND_BASE_URL` 里的主机名在 Docker 网络里解析不了。**用容器名**：`http://xcollector-backend:8000` —— `docker run` 只注册容器名，compose 才会注册服务名别名 `backend`。或者重起 backend（它的 `start.sh` 现在带 `--network-alias backend`）：`cd ../backend && ./start.sh`。`bot/preflight.sh` 会提前把这条查出来 |
 | `start.sh` 报「找不到 Docker 网络 xcollector」 | 还没起 backend。`cd ../backend && ./start.sh` |
 | **改了 `.env` 但不生效** | 容器的环境变量在**创建那一刻**就固定了。`./start.sh` 会重建容器（数据在卷里），`docker restart` 不会重读 `.env` |
 | 端口被占 / 容器起不来 | `./preflight.sh` 会告诉你是谁占的；或在 `.env` 里改 `BACKEND_HOST_PORT` / `BOT_HOST_PORT` |

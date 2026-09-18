@@ -85,6 +85,7 @@ docker run -d \
   --name "$NAME" \
   --restart unless-stopped \
   --network "$NETWORK" \
+  --network-alias backend \
   --env-file .env \
   -e DB_PATH=data/xcollector.db \
   -e ATTACHMENT_DIR=data/attachments \
@@ -94,6 +95,13 @@ docker run -d \
   -v "${VOLUME}:/app/data" \
   --security-opt no-new-privileges:true \
   "$FULL_IMAGE" >/dev/null
+# --network-alias backend：让别的容器能用 `http://backend:8000` 找到本服务。
+#
+# 这一条是**必须的**，因为 `docker run` 和 compose 不一样：compose 会自动把
+# **服务名**注册成网络别名，而 `docker run` 只注册**容器名**（xcollector-backend）。
+# 少了它，bot 里那句 BACKEND_BASE_URL=http://backend:8000 会解析失败，
+# 报 `[Errno -2] Name or service not known`（表现是「指令报错、状态页后端不可达」）。
+# 两个名字都注册着，所以你写 backend 或者 xcollector-backend 都能通。
 
 # ---- 4. 等健康检查 ----
 # 镜像自带 HEALTHCHECK（带 API_TOKEN 探 /api/health），所以这里不用 curl。
