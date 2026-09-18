@@ -359,22 +359,39 @@ echo "■ 功能开关"
 case "$EXTRACTOR_V" in
   rule) ok "EXTRACTOR=rule（不调用模型，不需要 API key）" ;;
   llm|both)
-    if [ -n "$(env_get DEEPSEEK_API_KEY '')" ] || [ -n "$(env_get OPENAI_API_KEY '')" ] \
+    if [ -n "$(env_get LLM_PRIMARY_API_KEY '')" ] \
+       || [ -n "$(env_get DEEPSEEK_API_KEY '')" ] || [ -n "$(env_get OPENAI_API_KEY '')" ] \
        || [ -n "$(env_get GEMINI_API_KEY '')" ] || [ -n "$(env_get GOOGLE_API_KEY '')" ]; then
-      ok "EXTRACTOR=$EXTRACTOR_V，且配了至少一个厂商 key"
+      ok "EXTRACTOR=$EXTRACTOR_V，且配了至少一个 key"
     else
-      bad "EXTRACTOR=$EXTRACTOR_V 但一个厂商 API key 都没配"
-      note "抽取会全部失败并降级为规则抽取。按模型前缀配 key，例如"
-      note "LLM_PRIMARY_MODEL=deepseek/deepseek-chat → DEEPSEEK_API_KEY"
+      bad "EXTRACTOR=$EXTRACTOR_V 但一个模型 API key 都没配"
+      note "抽取会全部失败并降级为规则抽取。可以按提供商配环境变量"
+      note "（LLM_PRIMARY_PROVIDER=deepseek → DEEPSEEK_API_KEY），"
+      note "或者直接用 LLM_PRIMARY_API_KEY 指定。"
     fi ;;
   *) bad "EXTRACTOR=$EXTRACTOR_V 不是合法值（只能是 rule / llm / both）" ;;
 esac
 
+# 白名单是 **fail-closed** 的：两个都留空 = bot 一条消息都不会处理。
+# 这跟「留空就全收」完全相反，不说清楚的话表现出来只是「bot 连上了但什么都不干」。
 if [ -z "$GROUP_WHITELIST_V" ]; then
-  warn "GROUP_WHITELIST 为空 —— **所有群的消息都会被处理**"
-  note "不设名单时，bot 会把它能收到的任何群消息都收进来。建议填上。"
+  bad "GROUP_WHITELIST 为空 —— bot 会**忽略所有群的消息**"
+  note "白名单是 fail-closed 的：留空不等于「全收」，等于「一个都不收」。"
+  note "填上要处理的群：GROUP_WHITELIST=123456789:官方通知群"
 else
   ok "GROUP_WHITELIST 已设置"
+fi
+
+SENDER_MODE_V=$(env_get SENDER_WHITELIST_MODE 'strict')
+if [ "$SENDER_MODE_V" = "off" ]; then
+  warn "SENDER_WHITELIST_MODE=off —— 白名单群里**谁发的消息都会被处理**"
+  note "官方通知一般只由固定几个人发布。确认这是你要的，否则改成 strict 并配 SENDER_WHITELIST。"
+elif [ -z "$(env_get SENDER_WHITELIST '')" ]; then
+  bad "SENDER_WHITELIST 为空 —— bot 会**忽略所有发送者的消息**"
+  note "填上发布通知的人：SENDER_WHITELIST=10001:张老师"
+  note "（如果这个群里谁发的都该收，把 SENDER_WHITELIST_MODE 设成 off —— 那是显式放开。）"
+else
+  ok "SENDER_WHITELIST 已设置（mode=$SENDER_MODE_V）"
 fi
 
 if [ -z "$(env_get COMMAND_WHITELIST '')" ]; then

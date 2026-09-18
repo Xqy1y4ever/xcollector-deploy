@@ -95,8 +95,14 @@ cp .env.example .env
 |---|---|
 | `API_TOKEN` | 写入令牌。生成一个随机串，**只给 bot 用，不进浏览器** |
 | `WEB_API_TOKEN` | 网页令牌。**另外生成一个不同的**，前端登录页输入这个 |
-| `GROUP_WHITELIST` | 你的官方通知群号 |
+| `GROUP_WHITELIST` | 要处理的群，格式 `群号:名称,群号:名称` |
+| `SENDER_WHITELIST` | 要处理的发送者，格式 `QQ号:名称` |
 | `ONEBOT_MODE` / `ONEBOT_WS_URL` | 见下面「接 NapCat」 |
+
+> **两个白名单都是 fail-closed 的：留空 = 一个消息都不处理。** bot 只处理同时满足
+> 「群在 `GROUP_WHITELIST`」且「发送者在 `SENDER_WHITELIST`」的消息。
+> 没配好时启动日志会警告「会忽略所有消息」。如果某个群里谁发的都该收，
+> 把 `SENDER_WHITELIST_MODE` 设成 `off`（那是**显式**放开）。
 
 ```bash
 # 生成两个令牌
