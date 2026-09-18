@@ -151,25 +151,31 @@ else
   note '生成一个： python3 -c "import secrets;print(secrets.token_hex(32))"'
 fi
 
-# 网页令牌：决定"拿到网页的人能不能改库"。这是最容易漏配的一项，
-# 而且漏配的后果是**静默的** —— 一切照常工作，只是分级没了。
-WEB_TOKEN_V=$(env_get WEB_API_TOKEN '')
-if [ -z "$API_TOKEN_V" ]; then
-  note "API_TOKEN 为空，跳过网页令牌的分级检查（本来就没启用认证）"
-elif [ -z "$WEB_TOKEN_V" ]; then
-  bad "WEB_API_TOKEN 为空 —— 分级没生效：所有能打开网页的人都能改库"
-  note "留空 = 网页令牌退化成写入令牌，也就是拆分之前的行为。"
-  note "想让网页只能读 + 标注，就单独生成一个**不同**的值填进去。"
-  note '生成： python3 -c "import secrets;print(secrets.token_hex(32))"'
-elif [ "$WEB_TOKEN_V" = "$API_TOKEN_V" ]; then
-  bad "WEB_API_TOKEN 与 API_TOKEN 相同 —— 分级完全失效"
-  note "网页令牌就是写入令牌：拿到它的人照样能入库、删通知、以你的身份发消息。"
-  note '换一个不同的随机串： python3 -c "import secrets;print(secrets.token_hex(32))"'
-else
-  ok "WEB_API_TOKEN 已设置，且与写入令牌不同（分级生效）"
-  if [ "${#WEB_TOKEN_V}" -lt 16 ]; then
-    warn "WEB_API_TOKEN 偏短，建议 32 字节随机值"
-  fi
+# 注册方式：决定"谁能用这个服务"。默认邀请码制 —— 每次注册都意味着别人可以花
+# 你的 LLM 额度、占你的存储，所以默认关着。
+SIGNUP_MODE_V=$(env_get SIGNUP_MODE 'invite')
+case "$SIGNUP_MODE_V" in
+  invite)
+    ok "SIGNUP_MODE=invite（需要邀请码）"
+    note "用 API_TOKEN 签发： curl -X POST http://127.0.0.1:8000/api/invites \\"
+    note '     -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \'
+    note '     -d "{\"note\":\"给谁的\",\"max_uses\":1}"'
+    ;;
+  open)
+    warn "SIGNUP_MODE=open —— **任何能通过 QQ 验证的人都能注册**"
+    note "每次注册都意味着别人可以花你的 LLM 额度、占用你的存储。"
+    note "建议改成 invite，或用配额/审批兜住。"
+    ;;
+  *)
+    bad "SIGNUP_MODE=$SIGNUP_MODE_V 不是合法值（只能是 invite / open）"
+    ;;
+esac
+
+# 旧配置里可能还留着 WEB_API_TOKEN（多用户改造之前是"网页令牌"）。
+# 后端已经不认识它了 —— 现在每个用户注册时各自签发 UserToken。
+if [ -n "$(env_get WEB_API_TOKEN '')" ]; then
+  warn "WEB_API_TOKEN 已废弃 —— 后端不再读它（现在每人一个 UserToken）"
+  note "可以从 .env 里删掉了。留着不会报错，只是会让人以为它还在生效。"
 fi
 
 # 附件签名：设为 0 会让证据图静默 401（图片位置空着，不会报错）
@@ -216,8 +222,8 @@ if [ -n "$BOT_CID" ]; then
     # 只比这些键：它们应该来自 .env，而且**没有**被 docker-compose.yml 的
     # environment 段覆盖。BACKEND_BASE_URL / *_LISTEN_* / TZ 是被覆盖的（那是刻意的），
     # 比了必然"不一致"，只是噪音。
-    COMPARE_KEYS="ONEBOT_MODE ONEBOT_WS_URL ONEBOT_ACCESS_TOKEN EXTRACTOR GROUP_WHITELIST DIGEST_ENABLED API_TOKEN WEB_API_TOKEN"
-    SECRET_KEYS=" ONEBOT_ACCESS_TOKEN API_TOKEN WEB_API_TOKEN "
+    COMPARE_KEYS="ONEBOT_MODE ONEBOT_WS_URL ONEBOT_ACCESS_TOKEN EXTRACTOR GROUP_WHITELIST DIGEST_ENABLED API_TOKEN"
+    SECRET_KEYS=" ONEBOT_ACCESS_TOKEN API_TOKEN "
 
     STALE=0
     STALE_KEYS=''
