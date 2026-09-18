@@ -185,27 +185,59 @@ fi
 # 入库客户端（可选，compose profile `client`）
 #
 # 它读宿主机上的一个聊天记录库，用**某个用户自己的 UserToken** 写后端。
+# 输入目录里放 nt_msg.db（客户端自己剥头+解密+导出）或现成的 nt_msg_export.db。
 # 这里只检查"配了的话别配错"，没配就跳过 —— 它是可选的。
 # --------------------------------------------------------------------------
-CLIENT_DB=$(env_get CLIENT_DB_HOST_PATH '')
+CLIENT_NT_DIR=$(env_get CLIENT_NT_MSG_HOST_DIR '')
+CLIENT_NT_KEY=$(env_get CLIENT_NT_MSG_KEY '')
+CLIENT_NT_KEY_FILE=$(env_get CLIENT_NT_MSG_KEY_FILE '')
+CLIENT_DB_PATH_IN=$(env_get CLIENT_DB_PATH '')
 CLIENT_TOK=$(env_get CLIENT_TOKEN '')
-if [ -n "$CLIENT_DB" ] || [ -n "$CLIENT_TOK" ]; then
-  if [ -z "$CLIENT_DB" ]; then
-    bad "配了 CLIENT_TOKEN 但没配 CLIENT_DB_HOST_PATH —— 客户端没有源库可读"
-  elif [ ! -f "$CLIENT_DB" ]; then
-    bad "CLIENT_DB_HOST_PATH 指向的文件不存在：$CLIENT_DB"
-    note "它要指向 nt_msg_db_util 的 **3.export.py** 产出的 nt_msg_export.db（明文 SQLite）。"
-    note "注意不是 nt_msg.db（加密），也不是 nt_msg_plain.db（正文还是 Protobuf）。"
+
+if [ -n "$CLIENT_NT_DIR" ] || [ -n "$CLIENT_TOK" ] || [ -n "$CLIENT_NT_KEY" ]; then
+  if [ -z "$CLIENT_NT_DIR" ]; then
+    bad "配了 CLIENT_TOKEN 但没配 CLIENT_NT_MSG_HOST_DIR —— 客户端没有源库可读"
+    note "它要指向放着 nt_msg.db（或 nt_msg_export.db）的那个**目录**。"
+  elif [ ! -d "$CLIENT_NT_DIR" ]; then
+    bad "CLIENT_NT_MSG_HOST_DIR 不是目录或不存在：$CLIENT_NT_DIR"
   else
-    ok "客户端源库存在：$CLIENT_DB"
-    case "$CLIENT_DB" in
-      *nt_msg_export.db) ;;
-      *) note "路径里没有 nt_msg_export.db —— 确认你给的是 3.export.py 的产物；给错了库客户端会明确报出来。" ;;
-    esac
+    if [ ! -w "$CLIENT_NT_DIR" ]; then
+      bad "那个目录不可写：$CLIENT_NT_DIR"
+      note "A 方案（给 nt_msg.db）的解密产物要写在它旁边。换个可写目录，"
+      note "或者把 nt_msg.db 复制/硬链接进去。"
+    fi
+    if [ -f "$CLIENT_NT_DIR/nt_msg.db" ]; then
+      ok "客户端源库存在（A 方案）：$CLIENT_NT_DIR/nt_msg.db"
+      if [ -z "$CLIENT_NT_KEY" ] && [ -z "$CLIENT_NT_KEY_FILE" ]; then
+        bad "A 方案没配密钥：CLIENT_NT_MSG_KEY 和 CLIENT_NT_MSG_KEY_FILE 都是空的"
+        note "密钥是 NTQQ 解密那个库用的 16 个 ASCII 字符，用 QQBackup/qq-win-db-key 自己取。"
+      elif [ -n "$CLIENT_NT_KEY_FILE" ]; then
+        if [ -f "$CLIENT_NT_KEY_FILE" ]; then
+          ok "客户端密钥来自文件：$CLIENT_NT_KEY_FILE"
+        else
+          bad "CLIENT_NT_MSG_KEY_FILE 指向的文件不存在：$CLIENT_NT_KEY_FILE"
+        fi
+      else
+        ok "客户端密钥来自 CLIENT_NT_MSG_KEY（${#CLIENT_NT_KEY} 个字符）"
+        if [ "${#CLIENT_NT_KEY}" -ne 16 ]; then
+          warn "密钥长度是 ${#CLIENT_NT_KEY}，不是 16 —— QQ 的密钥应该是 16 个 ASCII 字符"
+        fi
+      fi
+    elif [ -f "$CLIENT_NT_DIR/nt_msg_export.db" ]; then
+      ok "客户端源库存在（B 方案）：$CLIENT_NT_DIR/nt_msg_export.db"
+      if [ "$CLIENT_DB_PATH_IN" != "/data/nt/nt_msg_export.db" ]; then
+        warn "CLIENT_DB_PATH 现在是 '${CLIENT_DB_PATH_IN}'，B 方案应设成 /data/nt/nt_msg_export.db"
+      fi
+    else
+      bad "那个目录里既没有 nt_msg.db 也没有 nt_msg_export.db：$CLIENT_NT_DIR"
+      note "A 方案：放 QQ 的加密原始库 nt_msg.db（客户端自己剥头/解密/导出）"
+      note "B 方案：放 nt_msg_db_util 的 3.export.py 产出的 nt_msg_export.db，"
+      note "        并把 CLIENT_DB_PATH 设成 /data/nt/nt_msg_export.db"
+    fi
   fi
 
   if [ -z "$CLIENT_TOK" ]; then
-    warn "配了 CLIENT_DB_HOST_PATH 但没配 CLIENT_TOKEN —— 客户端会以未认证身份请求，全部 401"
+    warn "配了源库目录但没配 CLIENT_TOKEN —— 客户端会以未认证身份请求，全部 401"
   else
     case "$CLIENT_TOK" in
       xc_*) ok "客户端用的是 UserToken（xc_ 开头）" ;;

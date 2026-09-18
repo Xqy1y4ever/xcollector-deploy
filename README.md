@@ -248,25 +248,63 @@ Caddy 默认就会转发 `Authorization` 头，不用额外配置。
 聊天记录数据库，抽取通知后写进后端。它不连 QQ，所以入库不再依赖活的 OneBot 连接。
 
 ```
-NTQQ(nt_msg.db) ──nt_msg_db_util──▶ nt_msg_export.db ──▶ xcollector-client ──▶ backend
+NTQQ(nt_msg.db) ──▶ nt_msg_export.db ──▶ xcollector-client ──▶ backend
+                   ↑ 客户端自己剥头+解密+导出（1.decrypt.py / 3.export.py 已整合进去）
+                     也可以自己跑上游 nt_msg_db_util 得到
 ```
 
 它是**可选**的，而且用 compose profile 关着（`docker compose --profile client up -d`）。
 
 ### 怎么开
 
-```bash
-# 1. 用 nt_msg_db_util 把聊天记录导出成明文结构化库
-#    （1.decrypt.py → nt_msg_plain.db，再 3.export.py → nt_msg_export.db）
+**A. 只给一个加密的 `nt_msg.db`（推荐，客户端自己解密导出）**
 
-# 2. 在 .env 里填三项
-CLIENT_DB_HOST_PATH=/绝对路径/nt_msg_export.db
+```bash
+# 1. 在 .env 里填三项
+CLIENT_NT_MSG_HOST_DIR=/绝对路径/nt_db        # 放着 nt_msg.db 的那个目录
+CLIENT_NT_MSG_KEY=<16 个 ASCII 字符的密钥>     # 见下面「密钥从哪来」
+CLIENT_TOKEN=xc_...                          # ← 某个用户的 UserToken，不是服务令牌
+
+# 2. 起（第一次建议先跑一次 --prepare 看解密报告，它不连后端）
+docker compose --profile client run --rm client --prepare
+docker compose --profile client up -d
+```
+
+这个目录是**读写**挂进去的：解密产物（`nt_msg_clear.db` / `nt_msg_plain.db` /
+`nt_msg_export.db`）会写在 `nt_msg.db` 旁边，容器用户（uid 10001）要能写那个目录。
+嫌麻烦就挂一个专用目录，把 `nt_msg.db` 复制/硬链接进去。
+（真机实测：709 MB 的库，剥头 + 解密 19 秒，导出 45 秒。）
+
+**B. 自己用上游工具导出，只放导出库**
+
+```bash
+# 1. 用 nt_msg_db_util 导出
+#    （1.decrypt.py → nt_msg_plain.db，再 3.export.py → nt_msg_export.db）
+#    或者干脆用 A 方案让客户端自己跑这两步。
+
+# 2. 把 nt_msg_export.db 放进同一个目录，然后在 .env 里填
+CLIENT_NT_MSG_HOST_DIR=/绝对路径/nt_db
+CLIENT_DB_PATH=/data/nt/nt_msg_export.db      # 容器内路径
 CLIENT_ATTACHMENT_HOST_PATH=/绝对路径/attachments   # 可选
-CLIENT_TOKEN=xc_...        # ← 某个用户的 UserToken，不是服务令牌
+CLIENT_TOKEN=xc_...
 
 # 3. 起
 docker compose --profile client up -d
 ```
+
+预检脚本（`./preflight.sh`）会替你看这几件事：目录在不在、可不可写、
+里面是 `nt_msg.db` 还是 `nt_msg_export.db`、密钥配了没有（长度对不对）、
+`CLIENT_TOKEN` 是不是误填成了服务令牌。
+
+### 密钥从哪来
+
+密钥是 NTQQ 解密那个库用的 **16 个 ASCII 字符**，只在进程内存里，磁盘上没有。
+上游 [`QQBackup/qq-win-db-key`](https://github.com/QQBackup/qq-win-db-key)
+（或 `nt_msg_db_util/getkey.ps1`）能把它读出来。
+
+⚠️ **密钥不要写进 `docker-compose.yml`、不要做成 build-arg**（镜像层里谁都能看到），
+放 `.env` 里（compose 的 env_file）或者放一个文件用 `CLIENT_NT_MSG_KEY_FILE` 指过去。
+`.env` 已经在 `.gitignore` 里。
 
 `CLIENT_TOKEN` 从哪来：让用户在 QQ 里给机器人发 `/注册` 拿验证码，到网页上完成
 注册后得到。**它不是 `API_TOKEN`** —— 客户端就用那个用户自己的令牌，所以它写的
