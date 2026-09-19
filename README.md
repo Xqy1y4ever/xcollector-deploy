@@ -1,6 +1,10 @@
 # Xcollector Deploy
 
-Xcollector 的**部署入口**。两个栈，各自独立：
+Xcollector的项目主页和**部署入口**。
+
+**Xcollector是一个把qq聊天记录筛选并整合成包含ddl、概述等的任务，发布于web端实现统一查询和管理的项目。**
+
+两个栈，各自独立：
 
 ```
 ┌─ backend/ ─────────────────────────┐   ┌─ bot/ ──────────────────────────┐
@@ -28,12 +32,12 @@ Xcollector 的**部署入口**。两个栈，各自独立：
 
 ### 前置
 
-| | |
-|---|---|
-| Docker | 20.10+（只要 `docker`，不需要 compose） |
-| NapCat | 已安装并登录 QQ（接法见「接 NapCat」） |
-| 前端 | `xcollector-web` 的 `dist/`（见「托管 dist」） |
-| 端口 | 默认占宿主机 `8000`（后端）、`8082`（bot 管理接口）、`8081`（反向 OneBot，仅 server 模式） |
+|        |                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------ |
+| Docker | 20.10+（只要 `docker`，不需要 compose）                                                    |
+| NapCat | 已安装并登录 QQ（接法见「接 NapCat」）                                                     |
+| 前端   | `xcollector-web` 的 `dist/`（见「托管 dist」）                                             |
+| 端口   | 默认占宿主机 `8000`（后端）、`8082`（bot 管理接口）、`8081`（反向 OneBot，仅 server 模式） |
 
 ### 一条龙
 
@@ -88,21 +92,21 @@ vi .env                 # 至少填 API_TOKEN
 
 ### 配置（`backend/.env`）
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `API_TOKEN` | 空 | **服务令牌**，只有 bot 与你的运维命令用。**必须与 `bot/.env` 里同一个值。** 留空 = 不校验（仅本机开发） |
-| `SIGNUP_MODE` | `invite` | `invite` = 注册要邀请码（用 `API_TOKEN` 调 `POST /api/invites` 签发）；`open` = 谁都能注册 |
-| `BACKEND_HOST_PORT` | `8000` | 宿主机端口（反代指这里）。被占时改它，**不影响 bot**（容器之间走内部网络） |
-| `BACKEND_BIND` | `127.0.0.1` | 监听地址。web server 在别的机器上时才改 `0.0.0.0`（后端不带 TLS，先想清楚边界） |
-| `BACKEND_VOLUME` | `xcollector_backend-data` | 数据卷名（SQLite 库 + 附件）。换名字等于换一份数据 |
-| `IMAGE_BACKEND` / `VERSION` / `PULL_POLICY` | GHCR / `latest` / `always` | 镜像与升级策略 |
-| `MEDIA_MAX_BYTES` | `5242880` | 附件字节上限。**要和 `bot/.env` 对齐**，否则 bot 下载了却被后端 413 |
-| `ATTACHMENT_URL_TTL` | `3600` | 附件签名链接有效期（秒）。设 0 会让证据图 401 |
-| `ATTACHMENT_SIGN_KEY` | 空 | 留空 = 从 `API_TOKEN` 派生 |
-| `VERIFY_CODE_TTL` / `VERIFY_MAX_ATTEMPTS` | `600` / `5` | QQ 验证码有效期与允许猜错次数 |
-| `ALLOW_TOKEN_ROTATION` | `true` | 允许老用户重新要码换令牌 |
-| `CORS_ORIGINS` | 空 | 前后端**不同源**时才需要；同源反代留空 |
-| `LOG_LEVEL` / `TZ` | `INFO` / `Asia/Shanghai` | 日志级别、时区（与 bot 保持一致） |
+| 变量                                        | 默认                       | 说明                                                                                                    |
+| ------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `API_TOKEN`                                 | 空                         | **服务令牌**，只有 bot 与你的运维命令用。**必须与 `bot/.env` 里同一个值。** 留空 = 不校验（仅本机开发） |
+| `SIGNUP_MODE`                               | `invite`                   | `invite` = 注册要邀请码（用 `API_TOKEN` 调 `POST /api/invites` 签发）；`open` = 谁都能注册              |
+| `BACKEND_HOST_PORT`                         | `8000`                     | 宿主机端口（反代指这里）。被占时改它，**不影响 bot**（容器之间走内部网络）                              |
+| `BACKEND_BIND`                              | `127.0.0.1`                | 监听地址。web server 在别的机器上时才改 `0.0.0.0`（后端不带 TLS，先想清楚边界）                         |
+| `BACKEND_VOLUME`                            | `xcollector_backend-data`  | 数据卷名（SQLite 库 + 附件）。换名字等于换一份数据                                                      |
+| `IMAGE_BACKEND` / `VERSION` / `PULL_POLICY` | GHCR / `latest` / `always` | 镜像与升级策略                                                                                          |
+| `MEDIA_MAX_BYTES`                           | `5242880`                  | 附件字节上限。**要和 `bot/.env` 对齐**，否则 bot 下载了却被后端 413                                     |
+| `ATTACHMENT_URL_TTL`                        | `3600`                     | 附件签名链接有效期（秒）。设 0 会让证据图 401                                                           |
+| `ATTACHMENT_SIGN_KEY`                       | 空                         | 留空 = 从 `API_TOKEN` 派生                                                                              |
+| `VERIFY_CODE_TTL` / `VERIFY_MAX_ATTEMPTS`   | `600` / `5`                | QQ 验证码有效期与允许猜错次数                                                                           |
+| `ALLOW_TOKEN_ROTATION`                      | `true`                     | 允许老用户重新要码换令牌                                                                                |
+| `CORS_ORIGINS`                              | 空                         | 前后端**不同源**时才需要；同源反代留空                                                                  |
+| `LOG_LEVEL` / `TZ`                          | `INFO` / `Asia/Shanghai`   | 日志级别、时区（与 bot 保持一致）                                                                       |
 
 签发邀请码（`SIGNUP_MODE=invite` 时）：
 
@@ -153,22 +157,22 @@ vi .env                 # API_TOKEN 填同一个值；两个白名单必填；ON
 
 完整说明见 [`bot/.env.example`](bot/.env.example)。关键项：
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `API_TOKEN` | 空 | 与 `backend/.env` **同一个值**（不一致 → 全部 401） |
-| `BACKEND_BASE_URL` | `http://xcollector-backend:8000` | 两个容器之间走**容器名**；后端在别的机器上时换成那台的地址 |
-| `ONEBOT_MODE` / `ONEBOT_WS_URL` / `ONEBOT_ACCESS_TOKEN` | `client` / `host.docker.internal:3001` / 空 | OneBot 连接方式与凭据 |
-| `GROUP_WHITELIST` | 空 | 要处理的群，`群号:名称,群号:名称`。**留空 = 一个消息都不处理** |
-| `SENDER_WHITELIST` | 空 | 要处理的发送者，`QQ号:名称`。**留空 = 一个消息都不处理** |
-| `SENDER_WHITELIST_MODE` | `strict` | `off` = 该群里谁发的都算（**显式**放开） |
-| `EXTRACTOR` | `llm` | `rule` 只跑规则（不花钱）/ `llm` / `both` |
-| `LLM_PRIMARY_PROVIDER` / `LLM_PRIMARY_MODEL` | `deepseek` / `deepseek-chat` | 主模型；自建端点填 `LLM_PRIMARY_API_BASE` + `_API_KEY` |
-| `DEEPSEEK_API_KEY`（或对应提供商的 key） | 空 | 用 `llm`/`both` 才需要 |
-| `VLM_ENABLED` | `false` | 把图片也喂给模型 |
-| `DIGEST_ENABLED` / `DIGEST_TIME` | `true` / `21:30` | 每日摘要；`DIGEST_TARGET_QQ` 留空 = 每个用户各收自己那份 |
-| `COMMAND_WHITELIST` | 空 | 允许发指令的 QQ。**留空 = 除 `/注册`、`/help` 外谁都不能发指令** |
-| `BOT_HOST_PORT` / `BOT_BIND` | `8082` / `127.0.0.1` | 管理接口端口。**不要反代到公网** |
-| `ONEBOT_HOST_PORT` | `8081` | 仅 `ONEBOT_MODE=server` 时用 |
+| 变量                                                    | 默认                                        | 说明                                                             |
+| ------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `API_TOKEN`                                             | 空                                          | 与 `backend/.env` **同一个值**（不一致 → 全部 401）              |
+| `BACKEND_BASE_URL`                                      | `http://xcollector-backend:8000`            | 两个容器之间走**容器名**；后端在别的机器上时换成那台的地址       |
+| `ONEBOT_MODE` / `ONEBOT_WS_URL` / `ONEBOT_ACCESS_TOKEN` | `client` / `host.docker.internal:3001` / 空 | OneBot 连接方式与凭据                                            |
+| `GROUP_WHITELIST`                                       | 空                                          | 要处理的群，`群号:名称,群号:名称`。**留空 = 一个消息都不处理**   |
+| `SENDER_WHITELIST`                                      | 空                                          | 要处理的发送者，`QQ号:名称`。**留空 = 一个消息都不处理**         |
+| `SENDER_WHITELIST_MODE`                                 | `strict`                                    | `off` = 该群里谁发的都算（**显式**放开）                         |
+| `EXTRACTOR`                                             | `llm`                                       | `rule` 只跑规则（不花钱）/ `llm` / `both`                        |
+| `LLM_PRIMARY_PROVIDER` / `LLM_PRIMARY_MODEL`            | `deepseek` / `deepseek-chat`                | 主模型；自建端点填 `LLM_PRIMARY_API_BASE` + `_API_KEY`           |
+| `DEEPSEEK_API_KEY`（或对应提供商的 key）                | 空                                          | 用 `llm`/`both` 才需要                                           |
+| `VLM_ENABLED`                                           | `false`                                     | 把图片也喂给模型                                                 |
+| `DIGEST_ENABLED` / `DIGEST_TIME`                        | `true` / `21:30`                            | 每日摘要；`DIGEST_TARGET_QQ` 留空 = 每个用户各收自己那份         |
+| `COMMAND_WHITELIST`                                     | 空                                          | 允许发指令的 QQ。**留空 = 除 `/注册`、`/help` 外谁都不能发指令** |
+| `BOT_HOST_PORT` / `BOT_BIND`                            | `8082` / `127.0.0.1`                        | 管理接口端口。**不要反代到公网**                                 |
+| `ONEBOT_HOST_PORT`                                      | `8081`                                      | 仅 `ONEBOT_MODE=server` 时用                                     |
 
 > **两个白名单都是 fail-closed**：留空 = 一个消息都不处理，启动日志会明确警告。
 > 另外它们只决定 **bot 看得见什么**；用户订阅决定 **抽什么**，两者都要满足。
@@ -358,20 +362,20 @@ docker compose down            # 数据在同一个卷 xcollector_backend-data �
 先跑各自的 `./preflight.sh` —— 端口占用、`.env` 缺项、两边 `API_TOKEN` 是否一致、
 容器里实际拿到的值 vs `.env` 里的值，它都会列出来。
 
-| 现象 | 原因与处理 |
-|---|---|
-| `./start.sh: Permission denied` | 克隆里少了可执行位（Windows 上克隆会这样）。`chmod +x backend/*.sh bot/*.sh`，或直接用 `sh ./start.sh` |
+| 现象                                                                                           | 原因与处理                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `./start.sh: Permission denied`                                                                | 克隆里少了可执行位（Windows 上克隆会这样）。`chmod +x backend/*.sh bot/*.sh`，或直接用 `sh ./start.sh`                                                                                                                                                                                                               |
 | 指令报错 / 状态页说「后端不可达」，日志是 `ConnectError: [Errno -2] Name or service not known` | `BACKEND_BASE_URL` 里的主机名在 Docker 网络里解析不了。**用容器名**：`http://xcollector-backend:8000` —— `docker run` 只注册容器名，compose 才会注册服务名别名 `backend`。或者重起 backend（它的 `start.sh` 现在带 `--network-alias backend`）：`cd ../backend && ./start.sh`。`bot/preflight.sh` 会提前把这条查出来 |
-| `start.sh` 报「找不到 Docker 网络 xcollector」 | 还没起 backend。`cd ../backend && ./start.sh` |
-| **改了 `.env` 但不生效** | 容器的环境变量在**创建那一刻**就固定了。`./start.sh` 会重建容器（数据在卷里），`docker restart` 不会重读 `.env` |
-| 端口被占 / 容器起不来 | `./preflight.sh` 会告诉你是谁占的；或在 `.env` 里改 `BACKEND_HOST_PORT` / `BOT_HOST_PORT` |
-| 拉镜像报 `denied` / `manifest unknown` | GHCR 上的包是 private 而部署机没登录，或镜像名含大写 |
-| 页面显示「bot 未运行或不可达」 | `docker logs xcollector-bot`，多半是 `ONEBOT_WS_URL` 连不上 NapCat |
-| 日志里「已连接」之后立刻断开 | NapCat 的 WS 配了 Token 而 `ONEBOT_ACCESS_TOKEN` 没填/不一致 |
-| 页面能开但列表空、状态页说「后端不可达」 | backend 没起来，或两个 `.env` 的 `API_TOKEN` 不一致 |
-| bot 连上了但什么都不做 | 两个白名单留空 = 一个消息都不处理（fail-closed）。`./preflight.sh` 会点出来 |
-| 证据图片显示不出来 | `ATTACHMENT_URL_TTL=0`，签名链接失效 |
-| 客户端说「密钥不对 / 解不开」 | 密钥不是这个 QQ 账号的，或抄错了；用 `--prepare` 看它试过哪些参数 |
+| `start.sh` 报「找不到 Docker 网络 xcollector」                                                 | 还没起 backend。`cd ../backend && ./start.sh`                                                                                                                                                                                                                                                                        |
+| **改了 `.env` 但不生效**                                                                       | 容器的环境变量在**创建那一刻**就固定了。`./start.sh` 会重建容器（数据在卷里），`docker restart` 不会重读 `.env`                                                                                                                                                                                                      |
+| 端口被占 / 容器起不来                                                                          | `./preflight.sh` 会告诉你是谁占的；或在 `.env` 里改 `BACKEND_HOST_PORT` / `BOT_HOST_PORT`                                                                                                                                                                                                                            |
+| 拉镜像报 `denied` / `manifest unknown`                                                         | GHCR 上的包是 private 而部署机没登录，或镜像名含大写                                                                                                                                                                                                                                                                 |
+| 页面显示「bot 未运行或不可达」                                                                 | `docker logs xcollector-bot`，多半是 `ONEBOT_WS_URL` 连不上 NapCat                                                                                                                                                                                                                                                   |
+| 日志里「已连接」之后立刻断开                                                                   | NapCat 的 WS 配了 Token 而 `ONEBOT_ACCESS_TOKEN` 没填/不一致                                                                                                                                                                                                                                                         |
+| 页面能开但列表空、状态页说「后端不可达」                                                       | backend 没起来，或两个 `.env` 的 `API_TOKEN` 不一致                                                                                                                                                                                                                                                                  |
+| bot 连上了但什么都不做                                                                         | 两个白名单留空 = 一个消息都不处理（fail-closed）。`./preflight.sh` 会点出来                                                                                                                                                                                                                                          |
+| 证据图片显示不出来                                                                             | `ATTACHMENT_URL_TTL=0`，签名链接失效                                                                                                                                                                                                                                                                                 |
+| 客户端说「密钥不对 / 解不开」                                                                  | 密钥不是这个 QQ 账号的，或抄错了；用 `--prepare` 看它试过哪些参数                                                                                                                                                                                                                                                    |
 
 ## 安全默认值
 
